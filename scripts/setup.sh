@@ -43,6 +43,8 @@ clone_repo felucca        "$FELUCCA_URL"         "$FELUCCA_COMMIT"
 clone_repo zen-1          "$ZEN1_URL"            "$ZEN1_COMMIT"
 clone_repo tonitor        "$TONITOR_URL"         "$TONITOR_COMMIT"
 clone_repo sloop          "$SLOOP_URL"           "$SLOOP_COMMIT"
+clone_repo dinghy         "$DINGHY_URL"          "$DINGHY_COMMIT"
+clone_repo cs1            "$CS1_URL"             "$CS1_COMMIT"
 
 # --------------------------------------------------------------- symlinks ---
 # The build needs <firmware>/base -> fm1-base and fm1-base/bsp -> felucca-bsp. Symlinks (rather
@@ -117,6 +119,8 @@ else
     apply_patches zen-1
     apply_patches tonitor
     apply_patches sloop
+    apply_patches dinghy
+    apply_patches cs1
 fi
 
 # ------------------------------------------------------------------ venv ---
@@ -176,3 +180,5 @@ say "  scripts/build-felucca.sh    scripts/deploy-felucca.sh    scripts/verify-f
 say "  scripts/build-zen1.sh       scripts/deploy-zen1.sh       scripts/verify-zen1.sh"
 say "  scripts/build-tonitor.sh    scripts/deploy-tonitor.sh    scripts/verify-tonitor.sh"
 say "  scripts/build-sloop.sh      scripts/deploy-sloop.sh      scripts/verify-sloop.sh"
+say "  scripts/build-dinghy.sh     scripts/deploy-dinghy.sh     scripts/verify-dinghy.sh"
+say "  scripts/build-cs1.sh        scripts/deploy-cs1.sh        scripts/verify-cs1.sh"

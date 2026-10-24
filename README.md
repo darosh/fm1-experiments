@@ -1,10 +1,10 @@
 # fm-1-experiments
 
 Scratch repo for M-VAVE FM-1 firmware experiments, maintained mostly by an LLM following this
-file. It pins ten upstream repositories at known commits, keeps our changes as patch series, and
+file. It pins eleven upstream repositories at known commits, keeps our changes as patch series, and
 gives each firmware its own build, verify and deploy script.
 
-Seven firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
+Nine firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
 **AMB-1** ([fm1-amb](https://github.com/charlesvestal/fm1-amb)) sit on the shared fm1-base; fm1-base's
 own **template** firmware is built too, as the platform's reference app. **Felucca**
 ([Felucca](https://github.com/hugelton/Felucca)) is standalone: it carries its own platform under
@@ -14,6 +14,11 @@ is standalone too, on FoMni's older copy of the Felucca platform (vendored, no s
 descendant of the Felucca/SLOOP platform (newer than ZEN-1's: 48 kHz USB audio, no submodules).
 **SLOOP** ([sloop-fm1](https://github.com/isod89/sloop-fm1)) is standalone too, on its own vendored
 descendant of the same platform (48 kHz USB audio, a runtime USB RATE menu, no submodules).
+**Dinghy** ([dinghy](https://github.com/zvenson/dinghy)) is the "build your own firmware" template on
+that platform, also vendored (and its own SMK-37 board layer). **CS-1**
+([CS-1](https://github.com/twochannels/CS-1)) is a CS-80-style synthesizer built on Dinghy's platform.
+Dinghy and CS-1 carry SLOOP's platform *before* its AS-first collection change: their stock plain
+build is variant B below, the buggy layout.
 
 The current experiment is **USB host compatibility**: the firmwares built from these patches have a
 working USB audio input and a correctly named USB-MIDI port on macOS, Windows, Linux, Android and
@@ -266,6 +271,65 @@ override — the layout flags `#error` on a CDC build. `build-sloop.sh` passes `
 `--sdk DIR` through. The USB audio input is on in `firmware/src/felucca.c` (`FELUCCA_UAC=1`) and the
 runtime AUDIO > USB RATE menu keeps working across the new layout.
 
+### Dinghy (dinghy)
+
+Build; writes `clones/dinghy/build/dinghy.fwsc`:
+
+```sh
+./scripts/build-dinghy.sh
+```
+
+Host tests (run a build first; the installer and OTA tests need `build/dinghy.fwsc`; the SMK-37
+packages are optional, build them with `--board smk37` if you want them checked):
+
+```sh
+./scripts/verify-dinghy.sh
+```
+
+Flash (`--info` prints the connected FM-1's identity and writes nothing):
+
+```sh
+./scripts/deploy-dinghy.sh
+```
+
+Dinghy vendors the Felucca/SLOOP platform (no submodules) as SLOOP carried it before 2.7.2: the plain
+build's AC collection names MIDI first and the interface order is `AC, MIDI, AS` — variant B, which
+macOS 13–15 mis-attaches. The host-compat set is ported into its own `usb.c`:
+`FELUCCA_UAC_MIDI_LAST` (MIDI behind the streams, and out of the AC collection: the fix),
+`FELUCCA_UAC_IAD` (hygiene) and `FELUCCA_USB_SERIAL` (string descriptor 3, default `FELUCCA_ID`,
+`FM-1_990` or `FM-1_99Y` with `--release`). `build-dinghy.sh` exports MIDI_LAST and IAD; its
+`build.py` forwards them. It passes `--release X.Y`, `--board`, `--model` and `--sdk DIR` through.
+`patches/dinghy/02-host-build` lets the macOS host tests compile the canvas strip (`gfx.c`'s `.pool`
+section is ELF-only; CS-1 already handles it).
+
+### CS-1 (CS-1)
+
+Build; writes `clones/cs1/build/cs1.fwsc`:
+
+```sh
+./scripts/build-cs1.sh
+```
+
+Host tests (run a build first; they also need Node and Emscripten — `tools/get_emsdk.sh` installs
+the latter — for the site and browser-emulator tests):
+
+```sh
+./scripts/verify-cs1.sh
+```
+
+Flash (`--info` prints the connected FM-1's identity and writes nothing):
+
+```sh
+./scripts/deploy-cs1.sh
+```
+
+CS-1 is built on Dinghy's platform (vendored, no submodules), so it has the same stock layout and the
+same ported host-compat set: `build-cs1.sh` exports `FELUCCA_UAC_MIDI_LAST=1` and
+`FELUCCA_UAC_IAD=1`, and the serial follows the package identity (`FM-1_950`, or `FM-1_95Y` with
+`--release`). Its `build.py` forwards the flags; `tests/run_tests.sh` runs the three descriptor
+variants (its upstream suite has no end marker, so the patch also adds the `ALL HOST TESTS PASSED`
+line the verify script reads). `DINGHY_DUAL_CORE=0` builds single-core.
+
 ---
 
 ## 3. Pinned revisions
@@ -283,6 +347,8 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 | `aceyprime/zen-1` | `ec92952` (v1.2) | ZEN-1 |
 | `nzimas/tonitor` | `f51bd68` (0.56) | TONITOR |
 | `isod89/sloop-fm1` | `d893642` (2.8.1) | SLOOP |
+| `zvenson/dinghy` | `22acb91` (0.4) | Dinghy |
+| `twochannels/CS-1` | `5dce8fa` (0.3.4) | CS-1 |
 | `charlesvestal/fm1-fomni` | `b81eb6b` / `6c32623` | ZEN-1's platform guard upstreams (fetched by SHA into the zen-1 clone) |
 | AC79 SDK | tag `AC79NN_SDK_V1.2.14_2026-10-13` | external, outside this repo |
 | JieLi toolchain | package `jieli-linux-toolchains-20260730.1` | external, outside this repo |
@@ -290,7 +356,7 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 | python | `mido 1.3.3`, `python-rtmidi 1.5.8`, `fonttools 4.66.1`, `numpy 2.5.4`, `scipy 1.18.1` | `.venv`, installed by `setup.sh` |
 
 The repos are pinned to their latest `main` (LOOM-8, AMB-1 and ZEN-1 are at their latest release
-tag; TONITOR and SLOOP have none, so their pins are their latest main commits). ZEN-1's two `fm1-fomni` rows are not
+tag; TONITOR, SLOOP, Dinghy and CS-1 have none, so their pins are their latest main commits). ZEN-1's two `fm1-fomni` rows are not
 clones: `setup.sh` fetches them by SHA into `clones/zen-1` for its platform guard, because they are
 not on any branch of that repository.
 One fm1-base and one felucca-bsp are shared by both fm1-base firmwares, so the base is pinned to its
@@ -319,6 +385,8 @@ clones/                      ignored; scripts/setup.sh creates it
   zen-1/                     pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
   tonitor/                   pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
   sloop/                     pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
+  dinghy/                    pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
+  cs1/                       pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
 patches/<repo>/<NN-problem>/NNNN-*.patch
 scripts/
   setup.sh                   clones, links, patches, venv, prerequisite report
@@ -330,6 +398,8 @@ scripts/
   build-zen1.sh      deploy-zen1.sh      verify-zen1.sh
   build-tonitor.sh   deploy-tonitor.sh   verify-tonitor.sh
   build-sloop.sh     deploy-sloop.sh     verify-sloop.sh
+  build-dinghy.sh    deploy-dinghy.sh    verify-dinghy.sh
+  build-cs1.sh       deploy-cs1.sh       verify-cs1.sh
 revisions.env                the pins
 ```
 
@@ -368,6 +438,11 @@ patches/
                                     forwarding the flags
   sloop/02-sdk-v1.2.14/             build.py: the SDK hashes of the installed V1.2.14
   sloop/03-target-budget/           tests/target_budget.txt: the pinned toolchain's loop counts
+  dinghy/01-usb-host-compat/        usb.c: the same descriptor set, a descriptor test, and build.py
+                                    forwarding the flags
+  dinghy/02-host-build/             gfx.c: the canvas strip is an ordinary static on a macOS host build
+  cs1/01-usb-host-compat/           usb.c: the same descriptor set, a descriptor test, build.py
+                                    forwarding the flags, and the suite's end marker
 ```
 
 - Generated with `git format-patch`, applied with `git am --3way`, so the commit messages and
@@ -457,6 +532,14 @@ is ported into its `usb.c`; `build-sloop.sh` compiles the console out (`FELUCCA_
 from 2.7) and turns the plain-build flags on. The USB RATE menu's descriptor copies are made by
 walking the configuration descriptor, so they follow the new order and the audio IAD unchanged.
 
+Dinghy is a sixth chain (CS-1 a seventh, on it): its platform is a vendored copy of SLOOP's *before*
+2.7.2, so its stock plain build is variant B — the AC collection names MIDI first and the interface
+order is `AC, MIDI, AS`. The host-compat set is ported into its `usb.c`; `build-dinghy.sh` turns the
+plain-build flags on. CS-1 vendors the same `usb.c` (only its endpoint-buffer alignment and MIDI ring
+size differ from Dinghy's), so `patches/cs1/01-usb-host-compat` is the same set. Dinghy's host tests
+also need `patches/dinghy/02-host-build`: `gfx.c` puts the canvas strip in `.pool`, which Mach-O has
+no bare section for, so the static is plain on `__APPLE__`.
+
 ### Bug 1 — no USB audio input on macOS 13–15
 
 Upstream: [hugelton/Felucca#67](https://github.com/hugelton/Felucca/issues/67),
@@ -477,7 +560,7 @@ never bisected them. We did, on macOS 15.8.1:
 change alone is necessary-but-not-sufficient, and it moves with the ordering anyway (once MIDI
 leaves the audio function it must leave the collection). Implemented as `FELUCCA_UAC_MIDI_LAST`,
 enabled through `usb_midi_last` in `fm1.toml`; both fm1-base firmwares turn it on, and Felucca,
-ZEN-1, TONITOR and SLOOP export it from their build scripts. TONITOR 0.55, SLOOP 2.7.2 and Felucca
+ZEN-1, TONITOR, SLOOP, Dinghy and CS-1 export it from their build scripts. TONITOR 0.55, SLOOP 2.7.2 and Felucca
 1.6 all ship variant C (the streaming interface first in the collection, the old interface order); it
 does not fix the audio input on macOS 15.
 

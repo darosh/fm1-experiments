@@ -60,7 +60,7 @@ run_tests_exit() {  # REPO SLUG
     rc=$(cat "$st" 2>/dev/null || echo 1)
     rm -f "$st"
     printf '\nlog: %s\n' "$log"
-    [ "$rc" = 0 ] && grep -Eq 'ALL HOST TESTS PASSED|all tests passed|^tests: ok$' "$log" \
+    [ "$rc" = 0 ] && grep -Eq 'ALL HOST TESTS PASSED|ALL TESTS PASSED|all tests passed|^tests: ok$' "$log" \
         || die "the suite failed (exit $rc), see $log"
 }
 
