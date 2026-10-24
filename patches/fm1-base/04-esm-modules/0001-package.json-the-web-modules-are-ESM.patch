@@ -1,0 +1,30 @@
+From 10a00ca3cff264228d5fb78fcd8b3d09f1012ac9 Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Sat, 24 Oct 2026 12:20:27 +0200
+Subject: [PATCH] package.json: the web/ modules are ESM
+
+web/fm1pkg.js and web/fm1ota.js are ES modules, and the Node tests import them from .mjs. Without a
+package.json Node guesses a .js file's type, and an ambient one above the checkout ("type":
+"commonjs") makes the installer-boot test fail on a module it cannot find a named export in. Say
+it here: the tree's JavaScript is ESM.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ package.json | 5 +++++
+ 1 file changed, 5 insertions(+)
+ create mode 100644 package.json
+
+diff --git a/package.json b/package.json
+new file mode 100644
+index 0000000..0e9e778
+--- /dev/null
++++ b/package.json
+@@ -0,0 +1,5 @@
++{
++  "name": "fm1-base",
++  "private": true,
++  "type": "module"
++}
+-- 
+2.55.0
+

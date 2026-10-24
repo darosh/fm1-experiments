@@ -1,4 +1,4 @@
-From 937259e6f192e4e7eef606533746631f15a2f0e1 Mon Sep 17 00:00:00 2001
+From d84c40ae0ff7faef5744ce4c2fab78c84025f546 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Sat, 24 Oct 2026 11:06:28 +0200
 Subject: [PATCH] build.py: usb_midi_last, usb_iad and usb_serial; a USB
@@ -10,8 +10,9 @@ MIDI out of the AC header's collection alone (FELUCCA_UAC_AC_COLLECT) is not eno
 (hugelton/Felucca#67, kmplngj/Felucca#532)
 
 usb_iad gives the audio function an IAD covering AC + AS only, with the misc/IAD device class
-(EF 02 01, bcdUSB 2.00). Windows groups interfaces by IAD, and usbaudio fails to start
-(CM_PROB_FAILED_START) when the IAD also names the MIDI streaming interface.
+(EF 02 01, bcdUSB 2.00). It is descriptor hygiene, not a host fix: the plain no-IAD build also
+enumerates on macOS, Windows 11, Linux, Android and iPadOS. It wants usb_midi_last so that the
+interfaces it names (AC + AS) stay contiguous.
 
 usb_serial names the device's serial number string (default: the package identity), so a host
 tells firmwares sharing VID/PID 1209:0001 apart.
@@ -27,7 +28,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  create mode 100644 tests/usb_desc_test.c
 
 diff --git a/tests/run_tests.sh b/tests/run_tests.sh
-index d019c4a..abc6120 100755
+index f4e9e90..5ef7584 100755
 --- a/tests/run_tests.sh
 +++ b/tests/run_tests.sh
 @@ -26,6 +26,21 @@ run() {
@@ -51,10 +52,10 @@ index d019c4a..abc6120 100755
 +usb_desc serial '-DFELUCCA_UAC=1 -DFELUCCA_USB_SERIAL=\"FM-1_1000\"'
  run fastmath sh -c "$CC -O2 -w -o $OUT/fastmath_test tests/fastmath_test.c -lm && $OUT/fastmath_test"
  run installer "$PY" tests/install_test.py
- # backup and restore over USB (device/backup.c) on storage.c over a simulated flash, for a test app: the stream's
+ # the web installer's m-bootloader step (web/fm1ota.js installBoot) against a simulated FM-1
 diff --git a/tests/usb_desc_test.c b/tests/usb_desc_test.c
 new file mode 100644
-index 0000000..506ca1a
+index 0000000..724cc53
 --- /dev/null
 +++ b/tests/usb_desc_test.c
 @@ -0,0 +1,188 @@
@@ -178,8 +179,8 @@ index 0000000..506ca1a
 +            p += CFG_DESC_PLAIN[p] ? CFG_DESC_PLAIN[p] : 1;
 +        }
 +        check(niad == 1, "IAD device: exactly one IAD, for the audio function");
-+        /* the IAD must cover the audio interfaces only: Windows gives every interface it names to
-+         * usbaudio, which then fails to start on the MIDI streaming interface */
++        /* the IAD covers the audio interfaces only (AC + AS), which needs them contiguous: the MIDI
++         * function stays outside it */
 +        {
 +            uint32_t q = 9;
 +            while (q < sizeof CFG_DESC_PLAIN) {
@@ -247,7 +248,7 @@ index 0000000..506ca1a
 +    return fails ? 1 : 0;
 +}
 diff --git a/tools/build.py b/tools/build.py
-index fbf2809..a423793 100755
+index 34a2e42..5c8e4dd 100755
 --- a/tools/build.py
 +++ b/tools/build.py
 @@ -34,6 +34,13 @@ APP_DIR holds the app (app.h, app.c, its sources) and its fm1.toml:
@@ -258,13 +259,13 @@ index fbf2809..a423793 100755
 +                             macOS audio, #67). It also keeps MIDI out of the AC header's collection; the
 +                             collection alone (FELUCCA_UAC_AC_COLLECT in the environment) is not enough
 +  usb_iad = true             an IAD and the misc/IAD device class for the audio function
-+                             (FELUCCA_UAC_IAD): Windows groups interfaces by IAD, so without it
-+                             usbaudio.sys never binds the stream. Untested on macOS
++                             (FELUCCA_UAC_IAD): the audio interfaces form one function. Descriptor
++                             hygiene, not a host fix; wants usb_midi_last to keep AC + AS contiguous
 +  usb_serial = "..."         the device's serial number string (FELUCCA_USB_SERIAL; default: the identity)
    mirror = true              the screen and panel mirrored over USB (FM1B_MIRROR: device/mirror.c; web/mirror/,
                               tools/fm1_mirror.py), the panel played from the host; FM1B_MIRROR=1 in the environment
                               builds it in whatever fm1.toml says (an app's demo build), FM1B_POOL_SPARE=N the
-@@ -440,12 +447,20 @@ def build_app():
+@@ -446,12 +453,20 @@ def build_app():
      for key, flag in (("usb_audio_in", "FM1B_UAC"), ("usb_audio_out", "FM1B_UAC_OUT")):
          if key in CONF and flag not in os.environ:
              flags.append(f"-D{flag}={int(bool(CONF[key]))}")

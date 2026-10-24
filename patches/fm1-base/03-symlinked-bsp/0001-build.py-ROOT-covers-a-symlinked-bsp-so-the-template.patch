@@ -1,0 +1,35 @@
+From f16a9f9a99a5dc2431587e551b8a31626bd7f8ac Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Sat, 24 Oct 2026 12:18:35 +0200
+Subject: [PATCH] build.py: ROOT covers a symlinked bsp, so the template builds
+ from fm1-base alone
+
+The template is an app inside fm1-base, so ROOT was commonpath(fm1-base, template) = fm1-base.
+With bsp/ a symlink to a checkout outside it (one felucca-bsp shared by every firmware), bsp's
+resolved paths are not under ROOT and inc() raised ValueError. Include BSP.resolve() in the
+common path: the template then builds from the clones/ parent, as the firmwares that keep fm1-base
+in base/ already did. No change for those: their common path is clones/ either way.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ tools/build.py | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/tools/build.py b/tools/build.py
+index 04e57e8..39969b2 100755
+--- a/tools/build.py
++++ b/tools/build.py
+@@ -846,7 +846,9 @@ def main():
+     STEM = NAME + ("-usb" if CONF.get("ble") and not BLE else "")
+     OUT = APP / "build"
+     GEN, LDR = OUT / "gen", OUT / "loader"
+-    ROOT = Path(os.path.commonpath([SRC, APP]))
++    # the container mount and every relative path start here; bsp/ may be a symlink to a checkout
++    # outside fm1-base (this tree shares one felucca-bsp with every firmware), so resolve it too
++    ROOT = Path(os.path.commonpath([SRC, APP, BSP.resolve()]))
+     prefix = CONF.get("id_prefix", "FM-1_0")
+     if not re.fullmatch(r"FM-1_\d+", prefix):
+         raise SystemExit(f"fm1.toml id_prefix {prefix!r}: FM-1_ and digits only (the update tools parse it)")
+-- 
+2.55.0
+

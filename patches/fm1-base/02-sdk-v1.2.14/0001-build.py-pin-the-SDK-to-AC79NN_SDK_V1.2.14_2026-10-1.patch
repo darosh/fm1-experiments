@@ -1,4 +1,4 @@
-From 09c46e9857a838a4e41cb4014bed97643b731750 Mon Sep 17 00:00:00 2001
+From 2a8824d743c5f7b20601090cff0448168f01ffb3 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Sat, 24 Oct 2026 11:06:39 +0200
 Subject: [PATCH] build.py: pin the SDK to AC79NN_SDK_V1.2.14_2026-10-13
@@ -16,10 +16,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  1 file changed, 7 insertions(+), 4 deletions(-)
 
 diff --git a/tools/build.py b/tools/build.py
-index a423793..b5c1536 100755
+index 5c8e4dd..04e57e8 100755
 --- a/tools/build.py
 +++ b/tools/build.py
-@@ -109,11 +109,14 @@ CPU = "r3"                          # the core: the compiler, the LTO plugin and
+@@ -114,11 +114,14 @@ CPU = "r3"                          # the core: the compiler, the LTO plugin and
  FPU = [f"-mcpu={CPU}", "-mfprev1", "-ffp-contract=off"]
  LINE = re.compile(r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*\t(.*)$")
  
@@ -37,7 +37,7 @@ index a423793..b5c1536 100755
  }
  
  PRODUCT = None                      # package identity (fm1.toml id_prefix; see main)
-@@ -840,7 +843,7 @@ def main():
+@@ -864,7 +867,7 @@ def main():
      fm1pkg_make.SDK = a.sdk
      for rel, sha in SDK_SHA256.items():          # fail early without the SDK
          if hashlib.sha256(fm1pkg_make.sdk_file(rel)).hexdigest() != sha:

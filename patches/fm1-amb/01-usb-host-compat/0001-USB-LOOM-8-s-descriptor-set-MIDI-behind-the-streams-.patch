@@ -1,0 +1,45 @@
+From 6c2f89574a389ff3cb0c42222bf837dc6bb2c278 Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Sat, 24 Oct 2026 12:15:44 +0200
+Subject: [PATCH] USB: LOOM-8's descriptor set (MIDI behind the streams, an
+ audio IAD, the names)
+
+usb_midi_last puts the MIDI function behind the streaming interfaces (macOS 13-15 audio input,
+hugelton/Felucca#67, kmplngj/Felucca#532). usb_iad groups AC + AS behind one IAD: descriptor
+hygiene rather than a host fix, and it wants usb_midi_last so those interfaces stay contiguous.
+
+The USB names follow LOOM-8's convention: the platform as the Manufacturer and the platform plus
+the firmware as the product. The serial number string keeps the default (the package identity,
+FM-1_700 for a dev build), so a host tells this firmware from the others sharing VID/PID
+1209:0001.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ app/fm1.toml | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/app/fm1.toml b/app/fm1.toml
+index 8933a3c..8d30fef 100644
+--- a/app/fm1.toml
++++ b/app/fm1.toml
+@@ -1,11 +1,15 @@
+ # AMB-1's build settings (fm1-base's tools/build.py: ./build.sh)
+ name = "AMB"                   # the build's files: amb.fwsc, amb-X.Y.fwsc
+ id_prefix = "FM-1_7"           # package identity: dev FM-1_700, releases FM-1_7XXYYZZ (as AMB-1 0.9)
+-usb_manufacturer = "AMB-1"
+-usb_product = "AMB-1 FM-1"
++usb_manufacturer = "FM-1"      # Manufacturer in Audio MIDI Setup
++usb_product = "FM-1 AMB-1"     # Model, and the CoreAudio / CoreMIDI device name
+ ble = false                    # AMB-1 never uses the radio
+ usb_audio_in = true            # the music recordable over USB
+ usb_audio_out = false
++usb_midi_last = true           # MIDI after the streaming interfaces (macOS audio, Felucca#67): bisected,
++                               # this is the one that matters; it also keeps MIDI out of the AC collection
++usb_iad = true                 # the audio function's IAD (FELUCCA_UAC_IAD): descriptor hygiene,
++                               # not a host fix; wants usb_midi_last so AC + AS stay contiguous
+ words = "words.tsv"
+ include = ["dsp"]
+ o2 = ["dsp/amb.c"]             # the engine, at -O2
+-- 
+2.55.0
+

@@ -1,4 +1,4 @@
-From 086dcd721afccbc5fab1fb214ecaa9acc520309b Mon Sep 17 00:00:00 2001
+From 1e3595bb21346ef4750dfe34722b705827fa62d1 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Fri, 23 Oct 2026 18:05:21 +0200
 Subject: [PATCH] usb.c: interface order, serial number, and an optional IAD
@@ -10,8 +10,9 @@ For the macOS 13-15 audio bug (hugelton/Felucca#67, kmplngj/Felucca#532). Plain 
 default 0/0 descriptors are byte-identical.
 
 FELUCCA_UAC_IAD (off by default) gives the plain build the audio function's IAD and the misc/IAD
-device class: Windows groups interfaces by IAD, so without one usbaudio.sys never binds the
-stream. Not tested on macOS.
+device class. Descriptor hygiene, not a host fix: the plain no-IAD build enumerates on macOS,
+Windows 11, Linux, Android and iPadOS too. It needs FELUCCA_UAC_MIDI_LAST so the interfaces it
+names (AC + AS) stay contiguous, with MIDI outside them.
 
 FELUCCA_USB_SERIAL (default: FELUCCA_ID) gives the device a serial number string, so a host tells
 firmwares sharing VID/PID 1209:0001 apart; the update loader keeps iSerialNumber 0. bcdDevice gets
@@ -19,11 +20,11 @@ a bit per layout flag.
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>
 ---
- chip/usb.c | 133 +++++++++++++++++++++++++++++++++++++++++++++++------
- 1 file changed, 120 insertions(+), 13 deletions(-)
+ chip/usb.c | 132 +++++++++++++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 119 insertions(+), 13 deletions(-)
 
 diff --git a/chip/usb.c b/chip/usb.c
-index bdf6769..bf06723 100644
+index bdf6769..8b2ecb8 100644
 --- a/chip/usb.c
 +++ b/chip/usb.c
 @@ -26,7 +26,13 @@
@@ -57,9 +58,9 @@ index bdf6769..bf06723 100644
 +#define FELUCCA_UAC_MIDI_LAST 0
 +#endif
 +/* FELUCCA_UAC_IAD=1: the plain build presents the audio function with an IAD and the misc/IAD
-+ * device class (EF 02 01, bcdUSB 2.00). Windows groups interfaces into functions by IAD, so
-+ * without one usbaudio.sys never binds the audio stream (macOS, Linux, iOS walk interfaces by
-+ * class and do not need it). Untested on macOS: re-check #67 before shipping it there. */
++ * device class (EF 02 01, bcdUSB 2.00), so the host sees AC + AS as one function. Descriptor
++ * hygiene rather than a host fix: the plain no-IAD build also enumerates on macOS, Windows 11,
++ * Linux, Android and iPadOS. It needs FELUCCA_UAC_MIDI_LAST to keep AC + AS contiguous. */
 +#ifndef FELUCCA_UAC_IAD
 +#define FELUCCA_UAC_IAD 0
 +#endif
@@ -141,7 +142,7 @@ index bdf6769..bf06723 100644
  #define D_CDC(c)                                                                                     \
      D_IAD((c), 2, 2, 2, 1),                                /* IAD: CDC ACM */                           \
      9, 4, (c), 0, 1, 2, 2, 1, 0,                           /* communication */                          \
-@@ -374,16 +439,51 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
+@@ -374,16 +439,50 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
      7, 5, 0x03, 2, 64, 0, 0,                               /* EP3 OUT bulk */                           \
      7, 5, 0x83, 2, 64, 0, 0,                               /* EP3 IN bulk */
  #define CDC_LEN 66                                         /* with its IAD */
@@ -173,10 +174,9 @@ index bdf6769..bf06723 100644
  
 -/* without the console (FELUCCA_CDC=0, or usb_cdc_on = 0): class 0, no IAD, as a plain USB-MIDI / audio device */
 +/* without the console (FELUCCA_CDC=0, or usb_cdc_on = 0): class 0, no IAD, as a plain USB-MIDI / audio
-+ * device; with FELUCCA_UAC_IAD, misc/IAD (EF 02 01) and the audio function's IAD (Windows).
-+ * The IAD covers the audio interfaces ONLY (AC + AS): Windows gives every interface it names to
-+ * one function, and usbaudio fails to start (CM_PROB_FAILED_START) when the MIDI streaming
-+ * interface is in the block, so the MIDI function is left outside it. */
++ * device; with FELUCCA_UAC_IAD, misc/IAD (EF 02 01) and the audio function's IAD.
++ * The IAD covers the audio interfaces ONLY (AC + AS), which requires them contiguous: the MIDI
++ * function is left outside it (descriptor hygiene, not a host requirement). */
 +#if FELUCCA_UAC_IAD
 +#if !FELUCCA_UAC_MIDI_LAST
 +#error "FELUCCA_UAC_IAD: the audio IAD needs the audio interfaces contiguous (FELUCCA_UAC_MIDI_LAST)"
@@ -195,7 +195,7 @@ index bdf6769..bf06723 100644
  typedef char cfg_plain_len_ok[sizeof CFG_DESC_PLAIN == CFG_LEN_PLAIN ? 1 : -1];
  #if FELUCCA_CDC
  #define CFG_LEN (9 + 8 + AUD_LEN + CDC_LEN)
-@@ -423,8 +523,8 @@ static uint8_t usb_cdc_on = FELUCCA_CDC_DEFAULT != 0;      /* the console is pre
+@@ -423,8 +522,8 @@ static uint8_t usb_cdc_on = FELUCCA_CDC_DEFAULT != 0;      /* the console is pre
  #define USB_CDC_ON 0
  #define AUD_IF 0u
  #endif
@@ -206,7 +206,7 @@ index bdf6769..bf06723 100644
  static const uint8_t STR0[4] = {4, 3, 0x09, 0x04};
  static const uint8_t STR1[] = {42, 3, 'H', 0, 0xFC, 0, 'g', 0, 'e', 0, 'l', 0, 't', 0, 'o', 0, 'n', 0, ' ', 0, 'I', 0,
                                 'n', 0, 's', 0, 't', 0, 'r', 0, 'u', 0, 'm', 0, 'e', 0, 'n', 0, 't', 0, 's', 0};
-@@ -435,10 +535,11 @@ static const uint8_t STR2[] = {30, 3, 'F', 0, 'e', 0, 'l', 0, 'u', 0, 'c', 0, 'c
+@@ -435,10 +534,11 @@ static const uint8_t STR2[] = {30, 3, 'F', 0, 'e', 0, 'l', 0, 'u', 0, 'c', 0, 'c
  static const uint8_t STR2[] = {16, 3, 'F', 0, 'e', 0, 'l', 0, 'u', 0, 'c', 0, 'c', 0, 'a', 0};
  #endif
  
@@ -222,7 +222,7 @@ index bdf6769..bf06723 100644
  static uint8_t usb_str_buf[2 + 2 * 31];
  
  static int usb_str_desc(const char *s, const uint8_t **d, uint16_t *l)
-@@ -489,6 +590,12 @@ static int get_desc(uint32_t wvalue, const uint8_t **d, uint16_t *l)
+@@ -489,6 +589,12 @@ static int get_desc(uint32_t wvalue, const uint8_t **d, uint16_t *l)
              *d = STR2;
              *l = sizeof STR2;
              return 1;

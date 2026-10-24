@@ -1,8 +1,7 @@
-From 46e1c8dc308132ac9c533f6659ed5dbb858a8904 Mon Sep 17 00:00:00 2001
+From 4c708d49a674e3245349e754962a6896f5717f88 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Fri, 23 Oct 2026 18:04:56 +0200
-Subject: [PATCH] macOS/Windows USB: MIDI behind the streams, an audio IAD, and
- the USB names
+Subject: [PATCH] USB: MIDI behind the streams, an audio IAD, and the USB names
 
 Enables fm1-base's usb_midi_last and usb_iad:
 
@@ -10,8 +9,8 @@ Enables fm1-base's usb_midi_last and usb_iad:
   (AC, AS, [ASO], MIDI). Bisected on macOS 15.8.1: this ordering is what makes the audio input
   enumerate; keeping MIDI out of the AC collection alone is not enough. Felucca#67, kmplngj#532.
 - usb_iad (FELUCCA_UAC_IAD) gives the audio function an IAD covering AC + AS only, with the
-  misc/IAD device class. Windows groups interfaces by IAD, and usbaudio fails to start
-  (CM_PROB_FAILED_START) if the IAD also names the MIDI streaming interface.
+  misc/IAD device class. Descriptor hygiene rather than a host fix (the plain build enumerates on
+  every host we tried); it needs usb_midi_last so AC + AS stay contiguous, with MIDI outside.
 
 Verified working on macOS 15.8.1, Windows 11, Linux, Android and iPadOS: audio capture enumerates
 and MIDI binds on each. The device is named FM-1 / FM-1 LOOM-8 (Manufacturer / Model, the product
@@ -24,7 +23,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  1 file changed, 6 insertions(+), 2 deletions(-)
 
 diff --git a/app/fm1.toml b/app/fm1.toml
-index 5c88523..d3617fe 100644
+index d83c2e6..b0ab655 100644
 --- a/app/fm1.toml
 +++ b/app/fm1.toml
 @@ -1,11 +1,15 @@
@@ -40,8 +39,8 @@ index 5c88523..d3617fe 100644
  usb_audio_out = false
 +usb_midi_last = true           # MIDI after the streaming interfaces (macOS audio, Felucca#67): bisected,
 +                               # this is the one that matters; it also keeps MIDI out of the AC collection
-+usb_iad = true                 # the audio function's IAD (FELUCCA_UAC_IAD): Windows needs it; checked
-+                               # on macOS 15, Windows 11, Linux, Android, iPadOS
++usb_iad = true                 # the audio function's IAD (FELUCCA_UAC_IAD): descriptor hygiene,
++                               # not a host fix; checked on macOS 15, Windows 11, Linux, Android, iPadOS
  backup = true                  # projects and presets over USB (base/tools/fm1_backup.py); the page adds the samples (app/web/backup/extras.js)
  backup_ext = "loom8"           # the backup page's files: NAME.loom8
  backup_holds = "the three projects, the user presets and the samples"
