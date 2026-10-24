@@ -41,6 +41,7 @@ clone_repo fm1-loom       "$FM1_LOOM_URL"        "$FM1_LOOM_COMMIT"
 clone_repo fm1-amb        "$FM1_AMB_URL"         "$FM1_AMB_COMMIT"
 clone_repo felucca        "$FELUCCA_URL"         "$FELUCCA_COMMIT"
 clone_repo zen-1          "$ZEN1_URL"            "$ZEN1_COMMIT"
+clone_repo tonitor        "$TONITOR_URL"         "$TONITOR_COMMIT"
 
 # --------------------------------------------------------------- symlinks ---
 # The build needs <firmware>/base -> fm1-base and fm1-base/bsp -> felucca-bsp. Symlinks (rather
@@ -113,6 +114,7 @@ else
     apply_patches fm1-amb
     apply_patches felucca
     apply_patches zen-1
+    apply_patches tonitor
 fi
 
 # ------------------------------------------------------------------ venv ---
@@ -170,3 +172,4 @@ say "  scripts/build-amb.sh        scripts/deploy-amb.sh        scripts/verify-a
 say "  scripts/build-template.sh   scripts/deploy-template.sh   scripts/verify-base.sh"
 say "  scripts/build-felucca.sh    scripts/deploy-felucca.sh    scripts/verify-felucca.sh"
 say "  scripts/build-zen1.sh       scripts/deploy-zen1.sh       scripts/verify-zen1.sh"
+say "  scripts/build-tonitor.sh    scripts/deploy-tonitor.sh    scripts/verify-tonitor.sh"

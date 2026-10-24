@@ -1,15 +1,17 @@
 # fm-1-experiments
 
 Scratch repo for M-VAVE FM-1 firmware experiments, maintained mostly by an LLM following this
-file. It pins seven upstream repositories at known commits, keeps our changes as patch series, and
+file. It pins nine upstream repositories at known commits, keeps our changes as patch series, and
 gives each firmware its own build, verify and deploy script.
 
-Four firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
+Six firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
 **AMB-1** ([fm1-amb](https://github.com/charlesvestal/fm1-amb)) sit on the shared fm1-base; fm1-base's
 own **template** firmware is built too, as the platform's reference app. **Felucca**
 ([Felucca](https://github.com/hugelton/Felucca)) is standalone: it carries its own platform under
 `firmware/` and does not use fm1-base or felucca-bsp. **ZEN-1** ([zen-1](https://github.com/aceyprime/zen-1))
 is standalone too, on FoMni's older copy of the Felucca platform (vendored, no submodules).
+**TONITOR** ([tonitor](https://github.com/nzimas/tonitor)) is standalone as well, on its own vendored
+descendant of the Felucca/SLOOP platform (newer than ZEN-1's: 48 kHz USB audio, no submodules).
 
 The current experiment is **USB host compatibility**: the firmwares built from these patches have a
 working USB audio input and a correctly named USB-MIDI port on macOS, Windows, Linux, Android and
@@ -25,7 +27,7 @@ iPadOS. Nothing here is pushed upstream.
 | Rosetta (Apple silicon) | the build container is `linux/amd64` | `softwareupdate --install-rosetta --agree-to-license` |
 | JieLi toolchain | `clang` for `pi32v2` | after the first `setup.sh`: `clones/fm1-base/tools/get_toolchain.sh` (installs `~/.jieli/toolchain`; the pinned package is `jieli-linux-toolchains-20260730.1`) |
 | AC79 SDK | SPL, `cfg_tool.bin`, EQ table for packaging | see below |
-| Python with Pillow+raqm, fontTools, numpy, scipy | fonts, screen-reader words; Felucca rasterises its UI font at build time; ZEN-1's reference-analysis selftest uses numpy/scipy | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools, numpy and scipy |
+| Python with Pillow+raqm, fontTools, numpy, scipy | fonts, screen-reader words; Felucca and TONITOR rasterise their UI font at build time; ZEN-1's reference-analysis selftest uses numpy/scipy | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools, numpy and scipy |
 
 The SDK is ~1.4 GB and is **not** cloned into this repo:
 
@@ -201,6 +203,36 @@ ZEN-1's `tools/guard_platform.sh` keeps the platform byte-for-byte against its F
 there instead. `setup.sh` fetches FoMni by SHA into the clone, because those commits are not on any
 branch.
 
+### TONITOR (tonitor)
+
+Build; writes `clones/tonitor/build/tonitor.fwsc`:
+
+```sh
+./scripts/build-tonitor.sh
+```
+
+TONITOR's host tests (the generated tables and fonts, the target-instruction check, the DSP and sound
+goldens, the screens, the backup protocol, the USB host-compat descriptors; run a build first — the
+browser-installer test needs `build/tonitor.fwsc`):
+
+```sh
+./scripts/verify-tonitor.sh
+```
+
+Flash (`--info` prints the connected FM-1's identity and writes nothing):
+
+```sh
+./scripts/deploy-tonitor.sh
+```
+
+TONITOR vendors its own platform under `firmware/` (from Felucca and SLOOP; no submodules), so neither
+fm1-base's nor Felucca's patches reach it: the host-compat set is ported into its own `usb.c`.
+`build-tonitor.sh` exports `FELUCCA_UAC_MIDI_LAST=1` and `FELUCCA_UAC_IAD=1`; the serial follows the
+package identity (`FELUCCA_ID`, `FM-1_700`, or `FM-1_7XY` with `--release`). Export either flag as 0
+to override. `build-tonitor.sh` passes `--release X.Y` and `--sdk DIR` through. The USB audio input
+is on in TONITOR 0.52 and later (`FELUCCA_UAC=1` in `firmware/src/tonitor.c`); there is no CDC
+console build wired into its build script.
+
 ---
 
 ## 3. Pinned revisions
@@ -216,6 +248,7 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 | `hugelton/Felucca` | `63f88ec` | Felucca (main, 5 commits past v1.6.1) |
 | `hugelton/Felucca-Engines` | `c46e008` | Felucca's `firmware/engines` submodule |
 | `aceyprime/zen-1` | `ec92952` (v1.2) | ZEN-1 |
+| `nzimas/tonitor` | `f51bd68` (0.56) | TONITOR |
 | `charlesvestal/fm1-fomni` | `b81eb6b` / `6c32623` | ZEN-1's platform guard upstreams (fetched by SHA into the zen-1 clone) |
 | AC79 SDK | tag `AC79NN_SDK_V1.2.14_2026-10-13` | external, outside this repo |
 | JieLi toolchain | package `jieli-linux-toolchains-20260730.1` | external, outside this repo |
@@ -223,8 +256,9 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 | python | `mido 1.3.3`, `python-rtmidi 1.5.8`, `fonttools 4.66.1`, `numpy 2.5.4`, `scipy 1.18.1` | `.venv`, installed by `setup.sh` |
 
 The repos are pinned to their latest `main` (LOOM-8, AMB-1 and ZEN-1 are at their latest release
-tag). ZEN-1's two `fm1-fomni` rows are not clones: `setup.sh` fetches them by SHA into `clones/zen-1`
-for its platform guard, because they are not on any branch of that repository.
+tag; TONITOR has none, so its pin is 0.56's last main commit). ZEN-1's two `fm1-fomni` rows are not
+clones: `setup.sh` fetches them by SHA into `clones/zen-1` for its platform guard, because they are
+not on any branch of that repository.
 One fm1-base and one felucca-bsp are shared by both fm1-base firmwares, so the base is pinned to its
 own `main` rather than to either firmware's submodule pointer (`42dc630` for LOOM-8, `15dff6d` for
 AMB-1 — both are ancestors of the pin). Felucca-Engines is pinned to the commit Felucca's own tree
@@ -249,6 +283,7 @@ clones/                      ignored; scripts/setup.sh creates it
     firmware/engines -> ../../felucca-engines   symlink
   felucca-engines/           pinned checkout, branch "experiments"
   zen-1/                     pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
+  tonitor/                   pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
 patches/<repo>/<NN-problem>/NNNN-*.patch
 scripts/
   setup.sh                   clones, links, patches, venv, prerequisite report
@@ -258,6 +293,7 @@ scripts/
   build-template.sh  deploy-template.sh  verify-base.sh
   build-felucca.sh   deploy-felucca.sh   verify-felucca.sh
   build-zen1.sh      deploy-zen1.sh      verify-zen1.sh
+  build-tonitor.sh   deploy-tonitor.sh   verify-tonitor.sh
 revisions.env                the pins
 ```
 
@@ -289,6 +325,9 @@ patches/
                                     guard relaxed for usb.c; build.py forwards the flags
   zen-1/02-sdk-v1.2.14/             build.py: the SDK hashes of the installed V1.2.14
   zen-1/03-esm-modules/             package.json: the web/ modules are ESM
+  tonitor/01-usb-host-compat/       usb.c: the same descriptor set, a descriptor test, and build.py
+                                    forwarding the flags
+  tonitor/02-esm-modules/           package.json: the docs/ modules are ESM
 ```
 
 - Generated with `git format-patch`, applied with `git am --3way`, so the commit messages and
@@ -331,8 +370,9 @@ Regenerating an existing one: delete the old `.patch` files in that problem dire
 
 5. Move `clones/` away again and run `./scripts/setup.sh` twice, to prove every patch applies on a
    fresh clone and the second run is a no-op.
-6. `./scripts/verify-base.sh`, `./scripts/verify-loom.sh`, `./scripts/verify-amb.sh`, then the
-   three builds, then re-check hardware if the change touches USB.
+6. `./scripts/verify-base.sh`, `./scripts/verify-loom.sh`, `./scripts/verify-amb.sh` (and the
+   standalone firmwares' verifies when their pins move), then the builds, then re-check hardware if
+   the change touches USB.
 
 If `git am` stops inside a clone (a patch that neither applies nor is applied), the clone is left
 mid-session: `git -C clones/<repo> am --abort` (and `am --show-current-patch` to see where).
@@ -361,6 +401,14 @@ its `usb.c` the same way; its build script enables the audio input (`OM_UAC=1`),
 `tools/guard_platform.sh` keeps the rest of the platform byte-for-byte and now checks that `usb.c`
 still carries the set.
 
+TONITOR is a fourth chain: its platform is its own vendored descendant of Felucca and SLOOP (no
+submodules), newer than ZEN-1's copy — USB audio since 0.52, 48 kHz since 0.54/0.56, and TONITOR
+0.55's own #67 fix: the streaming interface first **inside the AC collection** while the interface
+order stays `AC, MIDI, AS`. That is variant C below, which our bisection — and Felucca's own tested
+1.6 build, which ships the same layout — found is not enough on macOS 15. The host-compat set is
+ported into its `usb.c`; `build-tonitor.sh` turns the plain-build flags on and its `build.py`
+forwards them (`FELUCCA_UAC` itself is on in `firmware/src/tonitor.c`).
+
 ### Bug 1 — no USB audio input on macOS 13–15
 
 Upstream: [hugelton/Felucca#67](https://github.com/hugelton/Felucca/issues/67),
@@ -380,7 +428,10 @@ never bisected them. We did, on macOS 15.8.1:
 **Moving the MIDI function behind the streaming interfaces is what fixes it.** The collection
 change alone is necessary-but-not-sufficient, and it moves with the ordering anyway (once MIDI
 leaves the audio function it must leave the collection). Implemented as `FELUCCA_UAC_MIDI_LAST`,
-enabled through `usb_midi_last` in `fm1.toml`; both firmwares turn it on.
+enabled through `usb_midi_last` in `fm1.toml`; both fm1-base firmwares turn it on, and Felucca,
+ZEN-1 and TONITOR export it from their build scripts. TONITOR 0.55 and Felucca 1.6 both ship
+variant C (the streaming interface first in the collection, the old interface order); it does not
+fix the audio input on macOS 15.
 
 The shipped builds also carry `FELUCCA_UAC_IAD` (`usb_iad`), which gives the audio function an IAD
 covering AC + AS only. It is descriptor hygiene, not a host fix: the plain no-IAD build enumerates
@@ -471,7 +522,7 @@ firmware installed over USB-MIDI keeps whatever SPL is already on the device. V1
 | `firmware/engines is empty` | run `setup.sh` (it links `clones/felucca/firmware/engines` to `clones/felucca-engines`) |
 | `deploy-*.sh: no package in ...` | run the matching build first; a release build is named `NAME-X.Y.fwsc` and is picked automatically |
 | template build: `undefined reference to usr_timeout_del` | the pinned SDK cannot link the BLE template; use the script's default `--no-ble` (or SDK V1.2.1) |
-| macOS shows the old MIDI name | CoreMIDI caches per VID/PID/serial: unplug, delete the stale entry in Audio MIDI Setup → MIDI Studio, replug. Each build here reports its identity as the serial, so switching between LOOM-8, AMB-1 and Felucca gives distinct entries |
+| macOS shows the old MIDI name | CoreMIDI caches per VID/PID/serial: unplug, delete the stale entry in Audio MIDI Setup → MIDI Studio, replug. Each build here reports its identity as the serial, so switching between LOOM-8, AMB-1, Felucca, ZEN-1 and TONITOR gives distinct entries |
 | Linux card named "pid.codes Test PID" | host-side naming; see the pid.codes note above |
 
 ## 9. Recovery
