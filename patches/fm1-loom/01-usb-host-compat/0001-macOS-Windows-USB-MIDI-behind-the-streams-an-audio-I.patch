@@ -1,0 +1,50 @@
+From 46e1c8dc308132ac9c533f6659ed5dbb858a8904 Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Fri, 23 Oct 2026 18:04:56 +0200
+Subject: [PATCH] macOS/Windows USB: MIDI behind the streams, an audio IAD, and
+ the USB names
+
+Enables fm1-base's usb_midi_last and usb_iad:
+
+- usb_midi_last (FELUCCA_UAC_MIDI_LAST) moves the MIDI function behind the streaming interfaces
+  (AC, AS, [ASO], MIDI). Bisected on macOS 15.8.1: this ordering is what makes the audio input
+  enumerate; keeping MIDI out of the AC collection alone is not enough. Felucca#67, kmplngj#532.
+- usb_iad (FELUCCA_UAC_IAD) gives the audio function an IAD covering AC + AS only, with the
+  misc/IAD device class. Windows groups interfaces by IAD, and usbaudio fails to start
+  (CM_PROB_FAILED_START) if the IAD also names the MIDI streaming interface.
+
+Verified working on macOS 15.8.1, Windows 11, Linux, Android and iPadOS: audio capture enumerates
+and MIDI binds on each. The device is named FM-1 / FM-1 LOOM-8 (Manufacturer / Model, the product
+being the CoreAudio and CoreMIDI name), and a serial number strings it apart from other firmwares
+sharing VID/PID 1209:0001 (AMB-1's name no longer sticks).
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ app/fm1.toml | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/app/fm1.toml b/app/fm1.toml
+index 5c88523..d3617fe 100644
+--- a/app/fm1.toml
++++ b/app/fm1.toml
+@@ -1,11 +1,15 @@
+ # LOOM-8's build settings (fm1-base's tools/build.py: ./build.sh)
+ name = "loom"                  # the build's files: loom.fwsc, loom-X.Y.fwsc, loom_host (APP_NAME, LOOM-8, is in app.h)
+ id_prefix = "FM-1_10"          # package identity: dev FM-1_1000, releases FM-1_10XXYYZZ (every single digit was taken)
+-usb_manufacturer = "LOOM-8"
+-usb_product = "LOOM-8 FM-1"
++usb_manufacturer = "FM-1"      # Manufacturer in Audio MIDI Setup
++usb_product = "FM-1 LOOM-8"    # Model, and the CoreAudio / CoreMIDI device name
+ ble = false                    # no radio: LOOM-8 needs the RAM (and stays GPL-3.0)
+ usb_audio_in = true            # the master output recordable over USB (Setup's USB AUDIO: follows the knob, or full)
+ usb_audio_out = false
++usb_midi_last = true           # MIDI after the streaming interfaces (macOS audio, Felucca#67): bisected,
++                               # this is the one that matters; it also keeps MIDI out of the AC collection
++usb_iad = true                 # the audio function's IAD (FELUCCA_UAC_IAD): Windows needs it; checked
++                               # on macOS 15, Windows 11, Linux, Android, iPadOS
+ backup = true                  # projects and presets over USB (base/tools/fm1_backup.py); the page adds the samples (app/web/backup/extras.js)
+ backup_ext = "loom8"           # the backup page's files: NAME.loom8
+ backup_holds = "the three projects, the user presets and the samples"
+-- 
+2.55.0
+

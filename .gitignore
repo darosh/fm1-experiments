@@ -1,0 +1,10 @@
+# cloned upstream repos (scripts/setup.sh recreates them)
+clones/
+
+# python environment and logs
+.venv/
+.logs/
+
+# editor
+.idea/
+.DS_Store

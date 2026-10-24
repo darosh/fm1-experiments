@@ -1,0 +1,291 @@
+From 937259e6f192e4e7eef606533746631f15a2f0e1 Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Sat, 24 Oct 2026 11:06:28 +0200
+Subject: [PATCH] build.py: usb_midi_last, usb_iad and usb_serial; a USB
+ descriptor test
+
+usb_midi_last moves the MIDI function behind the streaming interfaces (AC, AS, [ASO], MIDI).
+Bisected on macOS 15.8.1: this ordering is what makes the USB audio input enumerate; keeping
+MIDI out of the AC header's collection alone (FELUCCA_UAC_AC_COLLECT) is not enough.
+(hugelton/Felucca#67, kmplngj/Felucca#532)
+
+usb_iad gives the audio function an IAD covering AC + AS only, with the misc/IAD device class
+(EF 02 01, bcdUSB 2.00). Windows groups interfaces by IAD, and usbaudio fails to start
+(CM_PROB_FAILED_START) when the IAD also names the MIDI streaming interface.
+
+usb_serial names the device's serial number string (default: the package identity), so a host
+tells firmwares sharing VID/PID 1209:0001 apart.
+
+tests/usb_desc_test.c checks the descriptors byte by byte on the host across the layout matrix.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ tests/run_tests.sh    |  15 ++++
+ tests/usb_desc_test.c | 188 ++++++++++++++++++++++++++++++++++++++++++
+ tools/build.py        |  17 +++-
+ 3 files changed, 219 insertions(+), 1 deletion(-)
+ create mode 100644 tests/usb_desc_test.c
+
+diff --git a/tests/run_tests.sh b/tests/run_tests.sh
+index d019c4a..abc6120 100755
+--- a/tests/run_tests.sh
++++ b/tests/run_tests.sh
+@@ -26,6 +26,21 @@ run() {
+ run encoder sh -c "$CC -O2 -w -Ibsp/chip -Ibsp/boards/fm1 -o $OUT/encoder_test tests/encoder_test.c && $OUT/encoder_test"
+ run trs sh -c "$CC -O2 -w -Ibsp/chip -Ibsp/boards/fm1 -Idevice -o $OUT/trs_test tests/trs_test.c && $OUT/trs_test"
+ run storage sh -c "$CC -O2 -w -o $OUT/storage_test tests/storage_test.c && $OUT/storage_test"
++# the USB descriptors (felucca-bsp chip/usb.c) under each layout: the plain audio build, the two macOS
++# layout flags each alone and together, the audio output, and the build without audio
++usb_desc() {   # NAME FLAGS
++    run "usb-desc-$1" sh -c "$CC -O2 -w -Ibsp/chip -Ibsp/boards/fm1 $2 -o '$OUT/usb_desc_test' \
++        tests/usb_desc_test.c && '$OUT/usb_desc_test'"
++}
++usb_desc audio "-DFELUCCA_UAC=1"
++usb_desc audio-collect "-DFELUCCA_UAC=1 -DFELUCCA_UAC_AC_COLLECT=1"
++usb_desc audio-midi-last "-DFELUCCA_UAC=1 -DFELUCCA_UAC_MIDI_LAST=1"
++usb_desc audio-both "-DFELUCCA_UAC=1 -DFELUCCA_UAC_AC_COLLECT=1 -DFELUCCA_UAC_MIDI_LAST=1"
++usb_desc audio-out "-DFELUCCA_UAC=1 -DFELUCCA_UAC_OUT=1"
++usb_desc audio-out-both "-DFELUCCA_UAC=1 -DFELUCCA_UAC_OUT=1 -DFELUCCA_UAC_MIDI_LAST=1"
++usb_desc midi-only "-DFELUCCA_UAC=0"
++usb_desc iad "-DFELUCCA_UAC=1 -DFELUCCA_UAC_MIDI_LAST=1 -DFELUCCA_UAC_IAD=1"
++usb_desc serial '-DFELUCCA_UAC=1 -DFELUCCA_USB_SERIAL=\"FM-1_1000\"'
+ run fastmath sh -c "$CC -O2 -w -o $OUT/fastmath_test tests/fastmath_test.c -lm && $OUT/fastmath_test"
+ run installer "$PY" tests/install_test.py
+ # backup and restore over USB (device/backup.c) on storage.c over a simulated flash, for a test app: the stream's
+diff --git a/tests/usb_desc_test.c b/tests/usb_desc_test.c
+new file mode 100644
+index 0000000..506ca1a
+--- /dev/null
++++ b/tests/usb_desc_test.c
+@@ -0,0 +1,188 @@
++/* SPDX-License-Identifier: MPL-2.0
++ * Copyright (C) 2026 Charles Vestal */
++/* The USB descriptors as usb.c builds them (felucca-bsp chip/): the plain device's configuration,
++ * its interfaces and the audio control (AC) header, under the layout flags this file is compiled
++ * with. Runs on the host, so a descriptor change is checked byte by byte before any flash:
++ *
++ *   the configuration length equals AUD_LEN (the _Static_assert in usb.c catches the same);
++ *   the plain device descriptor: iSerialNumber set when FELUCCA_USB_SERIAL is, class 0, no IAD;
++ *   the interfaces are numbered contiguously from 0, in the order the build asked for;
++ *   FELUCCA_UAC_AC_COLLECT: the AC header's collection lists streaming interfaces only;
++ *   FELUCCA_UAC_MIDI_LAST: the MIDI interface comes last and the collection keeps the streams;
++ *   bcdDevice differs for each combination of the two layout flags.
++ *
++ *   cc -Ibsp/chip -DFELUCCA_UAC=1 tests/usb_desc_test.c && ./a.out
++ *   (tests/run_tests.sh runs the matrix: AC_COLLECT x MIDI_LAST x UAC_OUT, and UAC off) */
++#include <stdio.h>
++#include <stdint.h>
++#include <string.h>
++#define RING_PUBLISH() __asm__ volatile("" ::: "memory")
++static void fm1_delay_ms(uint32_t ms) { (void)ms; }
++#ifndef HALF_FRAMES                 /* the app's (device/unity.c: APP_BLOCK); the audio ring sizes need it */
++#define HALF_FRAMES 256u
++#endif
++#ifndef FELUCCA_UAC_48K             /* uac_fir.h, the resampler's filter, is not in this checkout */
++#define FELUCCA_UAC_48K 0
++#endif
++#include "usb.c"
++
++static int fails, checks;
++
++static void check(int ok, const char *what)
++{
++    checks++;
++    printf("  %s %s\n", ok ? "ok  " : "FAIL", what);
++    if (!ok)
++        fails++;
++}
++
++/* the configuration descriptor's distinct interfaces, first-appearance order (an interface with
++ * alt settings appears once per alt; only the numbers are wanted) */
++static int interfaces(uint8_t *out, int max)
++{
++    const uint8_t *d = CFG_DESC_PLAIN;
++    uint32_t i = 0;
++    int n = 0, j, seen;
++    while (i < sizeof CFG_DESC_PLAIN) {
++        uint8_t len = d[i];
++        if (d[i + 1] == 4) {                            /* INTERFACE */
++            for (seen = 0, j = 0; j < n; j++)
++                if (out[j] == d[i + 2])
++                    seen = 1;
++            if (!seen && n < max)
++                out[n++] = d[i + 2];
++        }
++        if (!len)
++            break;
++        i += len;
++    }
++    return n;
++}
++
++/* the interface descriptor of interface `ifn`: bInterfaceClass/SubClass are its bytes 5/6 */
++static const uint8_t *interface_desc(uint8_t ifn)
++{
++    const uint8_t *d = CFG_DESC_PLAIN;
++    uint32_t i = 9;                                      /* after the configuration descriptor */
++    while (i < sizeof CFG_DESC_PLAIN) {
++        uint8_t len = d[i];
++        if (d[i + 1] == 4 && d[i + 2] == ifn)            /* INTERFACE */
++            return d + i;
++        if (!len)
++            break;
++        i += len;
++    }
++    return 0;
++}
++
++static const uint8_t *ac_header(void)                    /* the first audio control interface's header */
++{
++    const uint8_t *d = CFG_DESC_PLAIN;
++    uint32_t i = 9;
++    while (i < sizeof CFG_DESC_PLAIN) {
++        uint8_t len = d[i];
++        if (d[i + 1] == 4 && d[i + 5] == 1 && d[i + 6] == 1)   /* audio control */
++            return d + i + len;                          /* the AC header right after it */
++        if (!len)
++            break;
++        i += len;
++    }
++    return 0;
++}
++
++int main(void)
++{
++    char buf[128];
++    int n;
++    uint8_t ifs[8];
++    const uint8_t *ach;
++    int i;
++
++    snprintf(buf, sizeof buf,
++             "config length %u is AUD_LEN %u", (unsigned)sizeof CFG_DESC_PLAIN, (unsigned)CFG_LEN_PLAIN);
++    check(sizeof CFG_DESC_PLAIN == CFG_LEN_PLAIN, buf);
++    check(CFG_DESC_PLAIN[4] == AUD_NIF, "bNumInterfaces is AUD_NIF");
++
++    printf("device: bcdDevice %02X%02X, class %02X, iSerial %u\n",
++           DEV_DESC_PLAIN[13], DEV_DESC_PLAIN[12], DEV_DESC_PLAIN[4], DEV_DESC_PLAIN[16]);
++#if FELUCCA_UAC_IAD
++    check(DEV_DESC_PLAIN[4] == 0xEF && DEV_DESC_PLAIN[5] == 0x02 && DEV_DESC_PLAIN[6] == 0x01,
++          "IAD device: class EF 02 01");
++    check(DEV_DESC_PLAIN[2] == 0x00 && DEV_DESC_PLAIN[3] == 0x02, "IAD device: bcdUSB 2.00");
++    {
++        int niad = 0;
++        uint32_t p = 9;
++        while (p < sizeof CFG_DESC_PLAIN) {
++            if (CFG_DESC_PLAIN[p + 1] == 0x0B)
++                niad++;
++            p += CFG_DESC_PLAIN[p] ? CFG_DESC_PLAIN[p] : 1;
++        }
++        check(niad == 1, "IAD device: exactly one IAD, for the audio function");
++        /* the IAD must cover the audio interfaces only: Windows gives every interface it names to
++         * usbaudio, which then fails to start on the MIDI streaming interface */
++        {
++            uint32_t q = 9;
++            while (q < sizeof CFG_DESC_PLAIN) {
++                if (CFG_DESC_PLAIN[q + 1] == 0x0B) {
++                    uint8_t first = CFG_DESC_PLAIN[q + 2], cnt = CFG_DESC_PLAIN[q + 3];
++                    int k, midi_in = 0;
++                    for (k = first; k < first + cnt; k++) {
++                        const uint8_t *id = interface_desc((uint8_t)k);
++                        if (id && id[5] == 1 && id[6] == 3)   /* audio class, MIDI streaming */
++                            midi_in = 1;
++                    }
++                    check(!midi_in, "IAD device: the IAD does not cover MIDI");
++                    check(cnt == 1 + FELUCCA_UAC + FELUCCA_UAC_OUT, "IAD device: the IAD covers AC + AS");
++                }
++                q += CFG_DESC_PLAIN[q] ? CFG_DESC_PLAIN[q] : 1;
++            }
++        }
++    }
++#else
++    check(DEV_DESC_PLAIN[4] == 0, "plain device: bDeviceClass 0 (no IAD)");
++#endif
++    check(DEV_DESC_PLAIN[16] == FELUCCA_USB_SNUM, "iSerialNumber is FELUCCA_USB_SNUM");
++
++    printf("config: wTotalLength %u\n", (unsigned)(CFG_DESC_PLAIN[2] | CFG_DESC_PLAIN[3] << 8));
++    n = interfaces(ifs, 8);
++    check(n == AUD_NIF, "as many interface entries as AUD_NIF");
++    for (i = 0; i < n; i++)
++        if (ifs[i] != (uint8_t)i)
++            break;
++    check(i == n, "interface numbers contiguous from 0");
++    printf("interfaces:");
++    for (i = 0; i < n; i++)
++        printf(" %u", ifs[i]);
++    printf("\n");
++
++    ach = ac_header();
++    check(ach != 0, "AC header found");
++    if (ach) {
++        int ncol = ach[7], ok_col = 1;
++        printf("AC header: bLength %u, wTotalLength %u, bInCollection %d, interfaces %d..\n",
++               ach[0], (unsigned)(ach[5] | ach[6] << 8), ncol, ach[8]);
++        check(ncol >= 1, "the AC collection has at least one interface");
++#if FELUCCA_UAC && (FELUCCA_UAC_AC_COLLECT || FELUCCA_UAC_MIDI_LAST)
++        /* the point of these flags: the collection names streaming interfaces only (the legacy
++         * layout deliberately lists MIDI too, which is the bug #67 describes) */
++        for (i = 0; i < ncol; i++) {                     /* each collected interface is a streaming one */
++            const uint8_t *id = interface_desc(ach[8 + i]);
++            if (!id || id[5] != 1 || id[6] != 2) {       /* audio class, streaming subclass */
++                check(0, "an AC-collected interface is not audio streaming");
++                ok_col = 0;
++                break;
++            }
++        }
++        if (ok_col && ncol)
++            check(1, "every AC-collected interface is audio streaming");
++#endif
++        if (FELUCCA_UAC_MIDI_LAST) {
++            int last = n ? ifs[n - 1] : -1;
++            check(last >= 0 && ach[8 + ach[7] - 1] != (uint8_t)last,
++                  "MIDI_LAST: the last interface is not in the AC collection");
++        }
++    }
++
++    printf("%s (%d checks, %d failed)\n", fails ? "FAILED" : "PASSED", checks, fails);
++    return fails ? 1 : 0;
++}
+diff --git a/tools/build.py b/tools/build.py
+index fbf2809..a423793 100755
+--- a/tools/build.py
++++ b/tools/build.py
+@@ -34,6 +34,13 @@ APP_DIR holds the app (app.h, app.c, its sources) and its fm1.toml:
+   ble_central = true         and the FM-1 connects to Bluetooth MIDI devices too (FM1B_BLE_CENTRAL), beside a computer
+   usb_audio_in = true        the FM-1 recordable over USB (FM1B_UAC; the default: true)
+   usb_audio_out = true       a computer plays through the FM-1 over USB (FM1B_UAC_OUT; the default: true)
++  usb_midi_last = true       the MIDI function after the streaming interfaces (FELUCCA_UAC_MIDI_LAST;
++                             macOS audio, #67). It also keeps MIDI out of the AC header's collection; the
++                             collection alone (FELUCCA_UAC_AC_COLLECT in the environment) is not enough
++  usb_iad = true             an IAD and the misc/IAD device class for the audio function
++                             (FELUCCA_UAC_IAD): Windows groups interfaces by IAD, so without it
++                             usbaudio.sys never binds the stream. Untested on macOS
++  usb_serial = "..."         the device's serial number string (FELUCCA_USB_SERIAL; default: the identity)
+   mirror = true              the screen and panel mirrored over USB (FM1B_MIRROR: device/mirror.c; web/mirror/,
+                              tools/fm1_mirror.py), the panel played from the host; FM1B_MIRROR=1 in the environment
+                              builds it in whatever fm1.toml says (an app's demo build), FM1B_POOL_SPARE=N the
+@@ -440,12 +447,20 @@ def build_app():
+     for key, flag in (("usb_audio_in", "FM1B_UAC"), ("usb_audio_out", "FM1B_UAC_OUT")):
+         if key in CONF and flag not in os.environ:
+             flags.append(f"-D{flag}={int(bool(CONF[key]))}")
++    for key, flag in (("usb_midi_last", "FELUCCA_UAC_MIDI_LAST"), ("usb_iad", "FELUCCA_UAC_IAD")):
++        if key in CONF and flag not in os.environ:
++            flags.append(f"-D{flag}={int(bool(CONF[key]))}")
+     for flag in ("FM1B_CDC", "FM1B_UAC", "FM1B_UAC_OUT", "FM1B_TRS"):
+         v = os.environ.get(flag)    # unset: fm1.toml's, the app's (app.h) or the platform's default (device/unity.c)
+         if v in ("0", "1"):
+             flags.append(f"-D{flag}={v}")
++    for flag in ("FELUCCA_UAC_AC_COLLECT", "FELUCCA_UAC_MIDI_LAST"):
++        v = os.environ.get(flag)    # fm1.toml's usb_ac_collect / usb_midi_last; an env 0/1 bisects a build
++        if v in ("0", "1"):
++            flags.append(f"-D{flag}={v}")
+     flags.append(f'-DFELUCCA_ID="{PRODUCT}"')
+-    for key, macro in (("usb_manufacturer", "FELUCCA_USB_MANUFACTURER"), ("usb_product", "FELUCCA_USB_PRODUCT")):
++    for key, macro in (("usb_manufacturer", "FELUCCA_USB_MANUFACTURER"), ("usb_product", "FELUCCA_USB_PRODUCT"),
++                       ("usb_serial", "FELUCCA_USB_SERIAL")):
+         if CONF.get(key):
+             flags.append(f'-D{macro}="{CONF[key]}"')
+     if VERSION:
+-- 
+2.55.0
+
