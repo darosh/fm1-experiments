@@ -40,6 +40,7 @@ clone_repo fm1-base       "$FM1_BASE_URL"        "$FM1_BASE_COMMIT"
 clone_repo fm1-loom       "$FM1_LOOM_URL"        "$FM1_LOOM_COMMIT"
 clone_repo fm1-amb        "$FM1_AMB_URL"         "$FM1_AMB_COMMIT"
 clone_repo felucca        "$FELUCCA_URL"         "$FELUCCA_COMMIT"
+clone_repo zen-1          "$ZEN1_URL"            "$ZEN1_COMMIT"
 
 # --------------------------------------------------------------- symlinks ---
 # The build needs <firmware>/base -> fm1-base and fm1-base/bsp -> felucca-bsp. Symlinks (rather
@@ -66,6 +67,19 @@ for dir in "$CLONES"/*; do
 done
 say "linked   fm1-loom/base, fm1-amb/base -> ../fm1-base; fm1-base/bsp -> ../felucca-bsp;"
 say "         felucca/firmware/engines -> ../felucca-engines"
+
+# ZEN-1's platform guard diffs firmware/ against FoMni commits that are not in the zen-1 clone; give
+# it the objects (tools/guard_platform.sh, docs/upstream.md). Best effort: the build/verify scripts say
+# what is missing if this fails.
+if ! git -C "$CLONES/zen-1" cat-file -e "$ZEN1_PLATFORM_UPSTREAM^{commit}" 2>/dev/null; then
+    git -C "$CLONES/zen-1" remote add fomni "$ZEN1_PLATFORM_URL" 2>/dev/null || true
+    # by SHA: these commits are not on any branch of fm1-fomni
+    git -C "$CLONES/zen-1" fetch --quiet fomni "$ZEN1_PLATFORM_UPSTREAM" 2>/dev/null \
+        || say "warning: zen-1: cannot fetch $ZEN1_PLATFORM_URL (the platform guard needs it)"
+fi
+if ! git -C "$CLONES/zen-1" cat-file -e "$ZEN1_INSTALL_UPSTREAM^{commit}" 2>/dev/null; then
+    git -C "$CLONES/zen-1" fetch --quiet fomni "$ZEN1_INSTALL_UPSTREAM" 2>/dev/null || true
+fi
 
 # --------------------------------------------------------------- patches ---
 # patches/<repo>/<NN-problem>/NNNN-*.patch, problem dirs in sorted order (the numeric prefix is
@@ -98,6 +112,7 @@ else
     apply_patches fm1-loom
     apply_patches fm1-amb
     apply_patches felucca
+    apply_patches zen-1
 fi
 
 # ------------------------------------------------------------------ venv ---
@@ -108,7 +123,8 @@ if [ ! -x "$ROOT/.venv/bin/python" ]; then
     "$PYBIN" -m venv --system-site-packages "$ROOT/.venv"
 fi
 "$ROOT/.venv/bin/pip" install --quiet --disable-pip-version-check \
-    "mido==$PY_MIDO_VERSION" "python-rtmidi==$PY_RTMIDI_VERSION" "fonttools==$PY_FONTTOOLS_VERSION"
+    "mido==$PY_MIDO_VERSION" "python-rtmidi==$PY_RTMIDI_VERSION" "fonttools==$PY_FONTTOOLS_VERSION" \
+    "numpy==$PY_NUMPY_VERSION" "scipy==$PY_SCIPY_VERSION"
 if ! "$ROOT/.venv/bin/python" -c 'import PIL.features as f,sys; sys.exit(0 if f.check("raqm") else 1)' 2>/dev/null; then
     say "warning: Pillow without libraqm in the venv; the fonts need it (brew install pillow)"
 fi
@@ -153,3 +169,4 @@ say "  scripts/build-loom.sh       scripts/deploy-loom.sh       scripts/verify-l
 say "  scripts/build-amb.sh        scripts/deploy-amb.sh        scripts/verify-amb.sh"
 say "  scripts/build-template.sh   scripts/deploy-template.sh   scripts/verify-base.sh"
 say "  scripts/build-felucca.sh    scripts/deploy-felucca.sh    scripts/verify-felucca.sh"
+say "  scripts/build-zen1.sh       scripts/deploy-zen1.sh       scripts/verify-zen1.sh"

@@ -1,14 +1,15 @@
 # fm-1-experiments
 
 Scratch repo for M-VAVE FM-1 firmware experiments, maintained mostly by an LLM following this
-file. It pins six upstream repositories at known commits, keeps our changes as patch series, and
+file. It pins seven upstream repositories at known commits, keeps our changes as patch series, and
 gives each firmware its own build, verify and deploy script.
 
-Three firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
+Four firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
 **AMB-1** ([fm1-amb](https://github.com/charlesvestal/fm1-amb)) sit on the shared fm1-base; fm1-base's
 own **template** firmware is built too, as the platform's reference app. **Felucca**
 ([Felucca](https://github.com/hugelton/Felucca)) is standalone: it carries its own platform under
-`firmware/` and does not use fm1-base or felucca-bsp.
+`firmware/` and does not use fm1-base or felucca-bsp. **ZEN-1** ([zen-1](https://github.com/aceyprime/zen-1))
+is standalone too, on FoMni's older copy of the Felucca platform (vendored, no submodules).
 
 The current experiment is **USB host compatibility**: the firmwares built from these patches have a
 working USB audio input and a correctly named USB-MIDI port on macOS, Windows, Linux, Android and
@@ -24,7 +25,7 @@ iPadOS. Nothing here is pushed upstream.
 | Rosetta (Apple silicon) | the build container is `linux/amd64` | `softwareupdate --install-rosetta --agree-to-license` |
 | JieLi toolchain | `clang` for `pi32v2` | after the first `setup.sh`: `clones/fm1-base/tools/get_toolchain.sh` (installs `~/.jieli/toolchain`; the pinned package is `jieli-linux-toolchains-20260730.1`) |
 | AC79 SDK | SPL, `cfg_tool.bin`, EQ table for packaging | see below |
-| Python with Pillow+raqm and fontTools | fonts, screen-reader words; Felucca rasterises its UI font at build time | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools |
+| Python with Pillow+raqm, fontTools, numpy, scipy | fonts, screen-reader words; Felucca rasterises its UI font at build time; ZEN-1's reference-analysis selftest uses numpy/scipy | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools, numpy and scipy |
 
 The SDK is ~1.4 GB and is **not** cloned into this repo:
 
@@ -164,6 +165,42 @@ through; export `FELUCCA_CDC=1` for the console layout (then clear the two plain
 `#error` on CDC builds). In the USB-only build MENU > USB SERIAL is still listed but does nothing:
 the console it would switch is not compiled in.
 
+### ZEN-1 (zen-1)
+
+Build; writes `clones/zen-1/build/zen1.fwsc`:
+
+```sh
+./scripts/build-zen1.sh
+```
+
+ZEN-1's host tests (the platform guard, the DSP and scene goldens, the USB descriptor matrix, the
+simulator scenarios, the update path, the installer; run a build first — several need
+`build/zen1.fwsc` and `build/gen`):
+
+```sh
+./scripts/verify-zen1.sh
+```
+
+Flash (`--info` prints the connected FM-1's identity and writes nothing):
+
+```sh
+./scripts/deploy-zen1.sh
+```
+
+ZEN-1 vendors FoMni's copy of the old Felucca platform under `firmware/` (no submodules), so neither
+fm1-base's nor Felucca's patches reach it: the host-compat set is ported into its own `usb.c`.
+`build-zen1.sh` exports `OM_CDC=0` (no serial console) and `OM_UAC=1` (the USB audio input;
+main.c maps these onto `FELUCCA_CDC` / `FELUCCA_UAC`), and the plain descriptors take
+`FELUCCA_UAC_MIDI_LAST=1` and `FELUCCA_UAC_IAD=1`; the serial follows the package identity
+(`FELUCCA_ID`, `FM-1_600`). Export `OM_CDC=1` for the console layout (then clear the plain-build
+flags — they `#error` on CDC builds). `build-zen1.sh` passes `--release X.Y.Z` and `--sdk DIR`
+through (the SDK otherwise comes from `AC79_SDK`).
+
+ZEN-1's `tools/guard_platform.sh` keeps the platform byte-for-byte against its FoMni upstream;
+`patches/zen-1` also relaxes it for `usb.c` (the file we diverge in) and requires the host-compat set
+there instead. `setup.sh` fetches FoMni by SHA into the clone, because those commits are not on any
+branch.
+
 ---
 
 ## 3. Pinned revisions
@@ -178,12 +215,16 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 | `hugelton/felucca-bsp` | `b413cd8` | the chip layer (`fm1-base/bsp`) |
 | `hugelton/Felucca` | `63f88ec` | Felucca (main, 5 commits past v1.6.1) |
 | `hugelton/Felucca-Engines` | `c46e008` | Felucca's `firmware/engines` submodule |
+| `aceyprime/zen-1` | `ec92952` (v1.2) | ZEN-1 |
+| `charlesvestal/fm1-fomni` | `b81eb6b` / `6c32623` | ZEN-1's platform guard upstreams (fetched by SHA into the zen-1 clone) |
 | AC79 SDK | tag `AC79NN_SDK_V1.2.14_2026-10-13` | external, outside this repo |
 | JieLi toolchain | package `jieli-linux-toolchains-20260730.1` | external, outside this repo |
 | docker base | `debian:bookworm-slim@sha256:7ff6ba3…` | the build container's image, `JIELI_DOCKER_IMAGE` |
-| python | `mido 1.3.3`, `python-rtmidi 1.5.8`, `fonttools 4.66.1` | `.venv`, installed by `setup.sh` |
+| python | `mido 1.3.3`, `python-rtmidi 1.5.8`, `fonttools 4.66.1`, `numpy 2.5.4`, `scipy 1.18.1` | `.venv`, installed by `setup.sh` |
 
-The repos are pinned to their latest `main` (LOOM-8 and AMB-1 are at their latest release tag).
+The repos are pinned to their latest `main` (LOOM-8, AMB-1 and ZEN-1 are at their latest release
+tag). ZEN-1's two `fm1-fomni` rows are not clones: `setup.sh` fetches them by SHA into `clones/zen-1`
+for its platform guard, because they are not on any branch of that repository.
 One fm1-base and one felucca-bsp are shared by both fm1-base firmwares, so the base is pinned to its
 own `main` rather than to either firmware's submodule pointer (`42dc630` for LOOM-8, `15dff6d` for
 AMB-1 — both are ancestors of the pin). Felucca-Engines is pinned to the commit Felucca's own tree
@@ -207,6 +248,7 @@ clones/                      ignored; scripts/setup.sh creates it
   felucca/                   pinned checkout, branch "experiments" (standalone: no base/bsp)
     firmware/engines -> ../../felucca-engines   symlink
   felucca-engines/           pinned checkout, branch "experiments"
+  zen-1/                     pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
 patches/<repo>/<NN-problem>/NNNN-*.patch
 scripts/
   setup.sh                   clones, links, patches, venv, prerequisite report
@@ -215,6 +257,7 @@ scripts/
   build-amb.sh    deploy-amb.sh    verify-amb.sh
   build-template.sh  deploy-template.sh  verify-base.sh
   build-felucca.sh   deploy-felucca.sh   verify-felucca.sh
+  build-zen1.sh      deploy-zen1.sh      verify-zen1.sh
 revisions.env                the pins
 ```
 
@@ -242,6 +285,10 @@ patches/
   felucca/01-usb-host-compat/       usb.c: MIDI behind the streams, the audio IAD, a serial; descriptor test
   felucca/02-sdk-v1.2.14/           build.py: the SDK hashes of the installed V1.2.14
   felucca/03-symlinked-engines/     build.py: the container mount covers a symlinked engines submodule
+  zen-1/01-usb-host-compat/         usb.c: the same descriptor set, a descriptor test, and the platform
+                                    guard relaxed for usb.c; build.py forwards the flags
+  zen-1/02-sdk-v1.2.14/             build.py: the SDK hashes of the installed V1.2.14
+  zen-1/03-esm-modules/             package.json: the web/ modules are ESM
 ```
 
 - Generated with `git format-patch`, applied with `git am --3way`, so the commit messages and
@@ -304,6 +351,15 @@ Felucca is a separate chain: it vendors its own platform under `firmware/` — i
 diverged copy of the USB stack (`firmware/src/usb.c`, a GPL-3.0 descendant of `bsp/chip/usb.c`'s
 descriptor code) — and its only submodule is `firmware/engines` (Felucca-Engines). The bsp patches
 do not reach it; the USB fix is ported into its own `usb.c` and its own build script.
+
+ZEN-1 is a third chain: it vendors FoMni's copy of the Felucca platform (the same lineage as
+Felucca's, but an older revision: `firmware/src/usb.c` has no `FELUCCA_UAC_AS_FIRST` and no 48 kHz
+input) and has no submodules at all. Its stock plain build is exactly the buggy variant — `AC, MIDI,
+AS` with the AC collection naming both — and `iSerialNumber` is 0. The host-compat set is ported into
+its `usb.c` the same way; its build script enables the audio input (`OM_UAC=1`), which upstream's
+`main.c` already defaults on but its `build.py` did not let a caller select. Its
+`tools/guard_platform.sh` keeps the rest of the platform byte-for-byte and now checks that `usb.c`
+still carries the set.
 
 ### Bug 1 — no USB audio input on macOS 13–15
 
