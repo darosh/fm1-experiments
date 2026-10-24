@@ -1,10 +1,10 @@
 # fm-1-experiments
 
 Scratch repo for M-VAVE FM-1 firmware experiments, maintained mostly by an LLM following this
-file. It pins nine upstream repositories at known commits, keeps our changes as patch series, and
+file. It pins ten upstream repositories at known commits, keeps our changes as patch series, and
 gives each firmware its own build, verify and deploy script.
 
-Six firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
+Seven firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
 **AMB-1** ([fm1-amb](https://github.com/charlesvestal/fm1-amb)) sit on the shared fm1-base; fm1-base's
 own **template** firmware is built too, as the platform's reference app. **Felucca**
 ([Felucca](https://github.com/hugelton/Felucca)) is standalone: it carries its own platform under
@@ -12,6 +12,8 @@ own **template** firmware is built too, as the platform's reference app. **Feluc
 is standalone too, on FoMni's older copy of the Felucca platform (vendored, no submodules).
 **TONITOR** ([tonitor](https://github.com/nzimas/tonitor)) is standalone as well, on its own vendored
 descendant of the Felucca/SLOOP platform (newer than ZEN-1's: 48 kHz USB audio, no submodules).
+**SLOOP** ([sloop-fm1](https://github.com/isod89/sloop-fm1)) is standalone too, on its own vendored
+descendant of the same platform (48 kHz USB audio, a runtime USB RATE menu, no submodules).
 
 The current experiment is **USB host compatibility**: the firmwares built from these patches have a
 working USB audio input and a correctly named USB-MIDI port on macOS, Windows, Linux, Android and
@@ -27,7 +29,7 @@ iPadOS. Nothing here is pushed upstream.
 | Rosetta (Apple silicon) | the build container is `linux/amd64` | `softwareupdate --install-rosetta --agree-to-license` |
 | JieLi toolchain | `clang` for `pi32v2` | after the first `setup.sh`: `clones/fm1-base/tools/get_toolchain.sh` (installs `~/.jieli/toolchain`; the pinned package is `jieli-linux-toolchains-20260730.1`) |
 | AC79 SDK | SPL, `cfg_tool.bin`, EQ table for packaging | see below |
-| Python with Pillow+raqm, fontTools, numpy, scipy | fonts, screen-reader words; Felucca and TONITOR rasterise their UI font at build time; ZEN-1's reference-analysis selftest uses numpy/scipy | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools, numpy and scipy |
+| Python with Pillow+raqm, fontTools, numpy, scipy | fonts, screen-reader words; Felucca, TONITOR and SLOOP rasterise their UI font at build time; ZEN-1's reference-analysis selftest uses numpy/scipy | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools, numpy and scipy |
 
 The SDK is ~1.4 GB and is **not** cloned into this repo:
 
@@ -233,6 +235,37 @@ to override. `build-tonitor.sh` passes `--release X.Y` and `--sdk DIR` through. 
 is on in TONITOR 0.52 and later (`FELUCCA_UAC=1` in `firmware/src/tonitor.c`); there is no CDC
 console build wired into its build script.
 
+### SLOOP (sloop-fm1)
+
+Build; writes `clones/sloop/build/felucca.fwsc`:
+
+```sh
+./scripts/build-sloop.sh
+```
+
+SLOOP's host tests (the sound goldens, the DSP and CPU budgets, the sequencer and screens, the FM6
+engine, the installer and the offline site, and the USB descriptors; run a build first — the installer,
+OTA and site tests need `build/felucca.fwsc`):
+
+```sh
+./scripts/verify-sloop.sh
+```
+
+Flash (`--info` prints the connected FM-1's identity and writes nothing):
+
+```sh
+./scripts/deploy-sloop.sh
+```
+
+SLOOP vendors its own platform under `firmware/` (from Felucca and SLOOP; no submodules), so neither
+fm1-base's nor Felucca's patches reach it: the host-compat set is ported into its own `usb.c`.
+`build-sloop.sh` compiles the serial console out (`FELUCCA_CDC=0`; SLOOP 2.7 dropped it from the FM-1's
+build anyway) and exports `FELUCCA_UAC_MIDI_LAST=1` and `FELUCCA_UAC_IAD=1`; the serial follows the
+package identity (`FELUCCA_ID`, `FM-1_900`, or `FM-1_9XY` with `--release`). Export any of them to
+override — the layout flags `#error` on a CDC build. `build-sloop.sh` passes `--release X.Y` and
+`--sdk DIR` through. The USB audio input is on in `firmware/src/felucca.c` (`FELUCCA_UAC=1`) and the
+runtime AUDIO > USB RATE menu keeps working across the new layout.
+
 ---
 
 ## 3. Pinned revisions
@@ -249,6 +282,7 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 | `hugelton/Felucca-Engines` | `c46e008` | Felucca's `firmware/engines` submodule |
 | `aceyprime/zen-1` | `ec92952` (v1.2) | ZEN-1 |
 | `nzimas/tonitor` | `f51bd68` (0.56) | TONITOR |
+| `isod89/sloop-fm1` | `d893642` (2.8.1) | SLOOP |
 | `charlesvestal/fm1-fomni` | `b81eb6b` / `6c32623` | ZEN-1's platform guard upstreams (fetched by SHA into the zen-1 clone) |
 | AC79 SDK | tag `AC79NN_SDK_V1.2.14_2026-10-13` | external, outside this repo |
 | JieLi toolchain | package `jieli-linux-toolchains-20260730.1` | external, outside this repo |
@@ -256,7 +290,7 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 | python | `mido 1.3.3`, `python-rtmidi 1.5.8`, `fonttools 4.66.1`, `numpy 2.5.4`, `scipy 1.18.1` | `.venv`, installed by `setup.sh` |
 
 The repos are pinned to their latest `main` (LOOM-8, AMB-1 and ZEN-1 are at their latest release
-tag; TONITOR has none, so its pin is 0.56's last main commit). ZEN-1's two `fm1-fomni` rows are not
+tag; TONITOR and SLOOP have none, so their pins are their latest main commits). ZEN-1's two `fm1-fomni` rows are not
 clones: `setup.sh` fetches them by SHA into `clones/zen-1` for its platform guard, because they are
 not on any branch of that repository.
 One fm1-base and one felucca-bsp are shared by both fm1-base firmwares, so the base is pinned to its
@@ -284,6 +318,7 @@ clones/                      ignored; scripts/setup.sh creates it
   felucca-engines/           pinned checkout, branch "experiments"
   zen-1/                     pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
   tonitor/                   pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
+  sloop/                     pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
 patches/<repo>/<NN-problem>/NNNN-*.patch
 scripts/
   setup.sh                   clones, links, patches, venv, prerequisite report
@@ -294,6 +329,7 @@ scripts/
   build-felucca.sh   deploy-felucca.sh   verify-felucca.sh
   build-zen1.sh      deploy-zen1.sh      verify-zen1.sh
   build-tonitor.sh   deploy-tonitor.sh   verify-tonitor.sh
+  build-sloop.sh     deploy-sloop.sh     verify-sloop.sh
 revisions.env                the pins
 ```
 
@@ -328,6 +364,10 @@ patches/
   tonitor/01-usb-host-compat/       usb.c: the same descriptor set, a descriptor test, and build.py
                                     forwarding the flags
   tonitor/02-esm-modules/           package.json: the docs/ modules are ESM
+  sloop/01-usb-host-compat/         usb.c: the same descriptor set, a descriptor test, and build.py
+                                    forwarding the flags
+  sloop/02-sdk-v1.2.14/             build.py: the SDK hashes of the installed V1.2.14
+  sloop/03-target-budget/           tests/target_budget.txt: the pinned toolchain's loop counts
 ```
 
 - Generated with `git format-patch`, applied with `git am --3way`, so the commit messages and
@@ -409,6 +449,14 @@ order stays `AC, MIDI, AS`. That is variant C below, which our bisection — and
 ported into its `usb.c`; `build-tonitor.sh` turns the plain-build flags on and its `build.py`
 forwards them (`FELUCCA_UAC` itself is on in `firmware/src/tonitor.c`).
 
+SLOOP is a fifth chain: its own vendored descendant of the same Felucca/SLOOP platform as TONITOR
+(no submodules), with 48 kHz audio and a runtime AUDIO > USB RATE menu. Since 2.7.2 it ships variant
+C — the streaming interface first **inside the AC collection**, interface order `AC, MIDI, AS` — and
+its own menu USB SERIAL toggle (a CDC composite, which macOS 13–15 mis-attach). The host-compat set
+is ported into its `usb.c`; `build-sloop.sh` compiles the console out (`FELUCCA_CDC=0`, the default
+from 2.7) and turns the plain-build flags on. The USB RATE menu's descriptor copies are made by
+walking the configuration descriptor, so they follow the new order and the audio IAD unchanged.
+
 ### Bug 1 — no USB audio input on macOS 13–15
 
 Upstream: [hugelton/Felucca#67](https://github.com/hugelton/Felucca/issues/67),
@@ -429,9 +477,9 @@ never bisected them. We did, on macOS 15.8.1:
 change alone is necessary-but-not-sufficient, and it moves with the ordering anyway (once MIDI
 leaves the audio function it must leave the collection). Implemented as `FELUCCA_UAC_MIDI_LAST`,
 enabled through `usb_midi_last` in `fm1.toml`; both fm1-base firmwares turn it on, and Felucca,
-ZEN-1 and TONITOR export it from their build scripts. TONITOR 0.55 and Felucca 1.6 both ship
-variant C (the streaming interface first in the collection, the old interface order); it does not
-fix the audio input on macOS 15.
+ZEN-1, TONITOR and SLOOP export it from their build scripts. TONITOR 0.55, SLOOP 2.7.2 and Felucca
+1.6 all ship variant C (the streaming interface first in the collection, the old interface order); it
+does not fix the audio input on macOS 15.
 
 The shipped builds also carry `FELUCCA_UAC_IAD` (`usb_iad`), which gives the audio function an IAD
 covering AC + AS only. It is descriptor hygiene, not a host fix: the plain no-IAD build enumerates
@@ -501,6 +549,10 @@ firmware installed over USB-MIDI keeps whatever SPL is already on the device. V1
   pinned V1.2.14.
 - The GUI arm of the bsp (`FELUCCA_USB_LAYOUT`, CDC console) is orthogonal and untested here; the
   new flags `#error` on CDC builds rather than multiplying the matrix.
+- SLOOP's static target budget was measured with an older toolchain; on a stock checkout of its pin
+  the pinned `jieli-linux-toolchains-20260730.1` clang counts the loops differently (`drums_mix`
+  +11 %, `fm1_alnk0_irq` +54 %). Its patch 03 remeasures it with `BUDGET_UPDATE=1` — the patched and
+  stock builds print identical numbers, so the change is the compiler's.
 - Felucca's `build.py` mounts its own tree in the container; a symlinked `firmware/engines` needs the
   common parent mounted instead (its patch 03). Felucca also generates its UI font at build time, so
   the venv needs `fontTools` (the 48 kHz FIR, `chip/uac_fir.h`'s equivalent, **is** in Felucca's
@@ -522,7 +574,7 @@ firmware installed over USB-MIDI keeps whatever SPL is already on the device. V1
 | `firmware/engines is empty` | run `setup.sh` (it links `clones/felucca/firmware/engines` to `clones/felucca-engines`) |
 | `deploy-*.sh: no package in ...` | run the matching build first; a release build is named `NAME-X.Y.fwsc` and is picked automatically |
 | template build: `undefined reference to usr_timeout_del` | the pinned SDK cannot link the BLE template; use the script's default `--no-ble` (or SDK V1.2.1) |
-| macOS shows the old MIDI name | CoreMIDI caches per VID/PID/serial: unplug, delete the stale entry in Audio MIDI Setup → MIDI Studio, replug. Each build here reports its identity as the serial, so switching between LOOM-8, AMB-1, Felucca, ZEN-1 and TONITOR gives distinct entries |
+| macOS shows the old MIDI name | CoreMIDI caches per VID/PID/serial: unplug, delete the stale entry in Audio MIDI Setup → MIDI Studio, replug. Each build here reports its identity as the serial, so switching between LOOM-8, AMB-1, Felucca, ZEN-1, TONITOR and SLOOP gives distinct entries |
 | Linux card named "pid.codes Test PID" | host-side naming; see the pid.codes note above |
 
 ## 9. Recovery

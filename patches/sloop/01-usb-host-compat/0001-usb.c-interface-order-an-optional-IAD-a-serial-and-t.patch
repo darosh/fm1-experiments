@@ -1,0 +1,488 @@
+From e30593068fd0abb8305fe8e7fb944a62e0fcc495 Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Sat, 24 Oct 2026 18:01:15 +0200
+Subject: [PATCH 1/3] usb.c: interface order, an optional IAD, a serial, and
+ the descriptor test
+
+FELUCCA_UAC_AC_COLLECT moves MIDI out of the AC header's collection; FELUCCA_UAC_MIDI_LAST puts
+the MIDI function after the streaming interfaces (AC, AS, MIDI) instead of between them. The
+fm-1-experiments bisection of #67 on macOS 15 found the ordering is what makes the audio input
+enumerate; SLOOP 2.7.2's AS-first collection alone is not enough. Plain builds only; the layout
+flags default 0, so an unmodified build's descriptors stay upstream's.
+
+FELUCCA_UAC_IAD (off by default) gives the plain build the audio function's IAD and the misc/IAD
+device class. Descriptor hygiene, not a host fix: it needs FELUCCA_UAC_MIDI_LAST so the interfaces it
+names (AC + AS) stay contiguous, with MIDI outside them.
+
+FELUCCA_USB_SERIAL (default: FELUCCA_ID) gives the device a serial number string, so a host tells
+firmwares sharing VID/PID 1209:0001 apart; the update loader keeps iSerialNumber 0. bcdDevice gets a
+bit per layout flag. The runtime menu USB SERIAL path (FELUCCA_CDC=1) keeps its own descriptors: the
+layout flags are a compile error with CDC, as build-sloop.sh builds without it.
+
+build.py forwards the new flags (the env settings build-sloop.sh exports).
+tests/usb_compat_test.c checks the shipped set in three variants; tests/run_tests.sh runs them.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ firmware/src/usb.c      | 190 +++++++++++++++++++++++++++++++++-------
+ tests/run_tests.sh      |  10 +++
+ tests/usb_compat_test.c | 146 ++++++++++++++++++++++++++++++
+ tools/build.py          |   3 +-
+ 4 files changed, 316 insertions(+), 33 deletions(-)
+ create mode 100644 tests/usb_compat_test.c
+
+diff --git a/firmware/src/usb.c b/firmware/src/usb.c
+index 6133eab..010967e 100644
+--- a/firmware/src/usb.c
++++ b/firmware/src/usb.c
+@@ -18,7 +18,16 @@
+  * phones and apps that only take 48 kHz: the host picks the rate with SET_CUR (two discrete rates in the one alt
+  * setting). The engines stay at 44.1 kHz; at 48 kHz uac_tap48 resamples (a polyphase FIR 160 / 147, uac_fir.h:
+  * 12 taps a phase, Q15, Felucca's 24 x Q30 made smaller) into the ring. 44.1 kHz, the rate until a host asks
+- * for another, sends the samples as before, bit for bit. */
++ * for another, sends the samples as before, bit for bit.
++ * FELUCCA_UAC_AC_COLLECT=1 / FELUCCA_UAC_MIDI_LAST=1 (plain builds, FELUCCA_UAC only): the AC header's
++ * collection stops naming MIDI, and the MIDI function moves behind the streaming interfaces
++ * (AC, AS, MIDI) instead of between them: the fm-1-experiments bisection of #67 (macOS 13-15). SLOOP
++ * 2.7.2's AS-first collection alone does not fix it.
++ * FELUCCA_UAC_IAD=1 (plain builds): the audio function gets an IAD and the misc/IAD device class, so a
++ * host sees AC + AS as one function; needs MIDI_LAST to keep them contiguous.
++ * FELUCCA_USB_SERIAL (default FELUCCA_ID): the device's own serial number string, so a host tells
++ * firmwares sharing VID/PID 1209:0001 apart instead of reusing a cached name; the update loader keeps
++ * iSerialNumber 0. */
+ #include "../hal/fm1_usb.h"   /* registers; relative, so the loader and the host tests find it too */
+ #ifndef FELUCCA_CDC
+ #define FELUCCA_CDC 0
+@@ -33,6 +42,54 @@
+ #undef FELUCCA_UAC_48K
+ #define FELUCCA_UAC_48K 0
+ #endif
++/* the host-compat descriptor flags (fm-1-experiments): plain (no-CDC) builds only; a CDC composite
++ * would multiply the layout permutations. The layout flags default 0, so an unmodified build's
++ * descriptors stay upstream's (only the serial number below is on by default). */
++#ifndef FELUCCA_UAC_AC_COLLECT
++#define FELUCCA_UAC_AC_COLLECT 0
++#endif
++#ifndef FELUCCA_UAC_MIDI_LAST
++#define FELUCCA_UAC_MIDI_LAST 0
++#endif
++#ifndef FELUCCA_UAC_IAD
++#define FELUCCA_UAC_IAD 0
++#endif
++#if FELUCCA_UAC_IAD && FELUCCA_CDC
++#error "FELUCCA_UAC_IAD: the plain build's IAD; the CDC layouts have their own"
++#endif
++#if FELUCCA_UAC_IAD && !FELUCCA_UAC
++#error "FELUCCA_UAC_IAD: no audio function to associate (needs FELUCCA_UAC)"
++#endif
++#if FELUCCA_UAC_IAD && !FELUCCA_UAC_MIDI_LAST
++#error "FELUCCA_UAC_IAD: the audio IAD needs the audio interfaces contiguous (FELUCCA_UAC_MIDI_LAST)"
++#endif
++#if (FELUCCA_UAC_AC_COLLECT || FELUCCA_UAC_MIDI_LAST) && !FELUCCA_UAC
++#error "FELUCCA_UAC_AC_COLLECT / FELUCCA_UAC_MIDI_LAST: no audio streaming to reorder (needs FELUCCA_UAC)"
++#endif
++#if (FELUCCA_UAC_AC_COLLECT || FELUCCA_UAC_MIDI_LAST) && FELUCCA_CDC
++#error "FELUCCA_UAC_AC_COLLECT / FELUCCA_UAC_MIDI_LAST: plain builds only (no FELUCCA_CDC)"
++#endif
++#if !FELUCCA_UAC
++#undef FELUCCA_UAC_AC_COLLECT
++#define FELUCCA_UAC_AC_COLLECT 0
++#undef FELUCCA_UAC_MIDI_LAST
++#define FELUCCA_UAC_MIDI_LAST 0
++#undef FELUCCA_UAC_IAD
++#define FELUCCA_UAC_IAD 0
++#endif
++/* FELUCCA_USB_SERIAL: a build's own serial number string (string descriptor 3, iSerialNumber), so the
++ * host tells two firmwares on the same VID/PID apart instead of reusing a cached name. Unless a build
++ * names its own, it is the package identity (FELUCCA_ID: "FM-1_900"). The update loader keeps
++ * iSerialNumber 0: its device (1209:0002) is the installer's. */
++#if !defined(FELUCCA_USB_SERIAL) && defined(FELUCCA_ID) && !defined(FELUCCA_LOADER)
++#define FELUCCA_USB_SERIAL FELUCCA_ID
++#endif
++#if defined(FELUCCA_USB_SERIAL) && !defined(FELUCCA_LOADER)
++#define FELUCCA_USB_SNUM 3
++#endif
++#ifndef FELUCCA_USB_SNUM
++#define FELUCCA_USB_SNUM 0
++#endif
+ enum { S_FADDR = 0, S_POWER = 1, S_INTRTX1 = 2, S_INTRTX2 = 3, S_INTRRX1 = 4, S_INTRRX2 = 5, S_INTRUSB = 6,
+        S_INTRTX1E = 7, S_INTRTX2E = 8, S_INTRRX1E = 9, S_INTRRX2E = 10, S_INTRUSBE = 11, S_FRAME1 = 12,
+        S_FRAME2 = 13, S_INDEX = 14,
+@@ -169,17 +226,57 @@ static void midi_out_event(uint32_t pkt)            /* from the audio ISR */
+ }
+ 
+ /* ------------------------------------------------------- descriptors --- */
+-/* interfaces: 0 audio control, 1 MIDI streaming, 2 audio streaming (FELUCCA_UAC), then CDC's two.
++/* interfaces: 0 audio control, then the MIDI and (FELUCCA_UAC) audio streaming interfaces, then CDC's
++ * two. FELUCCA_UAC_MIDI_LAST puts the streaming interface before MIDI (AC, AS, MIDI) and takes MIDI out
++ * of the AC header's collection: the fm-1-experiments bisection of #67 (macOS 13-15); the order is what
++ * makes the audio input enumerate. FELUCCA_UAC_AC_COLLECT drops MIDI from the collection on its own.
+  * bcdDevice: 3.00 MIDI, +0.01 CDC, +0.10 the audio input, +0.20 more with 48 kHz (2.5), +0.08 the audio
+- * streaming interface first in the AC collection (2.7.2, UAC_BCD_AS) (hosts cache descriptors per version) */
++ * streaming interface first in the AC collection (2.7.2, UAC_BCD_AS), and a bit per host-compat flag
++ * (hosts cache descriptors per version) */
+ #define UAC_BCD_AS (0x08 * FELUCCA_UAC)
++#define UAC_BCD_HC (0x02 * FELUCCA_UAC_AC_COLLECT + 0x04 * FELUCCA_UAC_MIDI_LAST + 0x40 * FELUCCA_UAC_IAD)
+ #define CDC_IF (2 + FELUCCA_UAC)
+-#define UAC_AS_IF 2u
+-#define CFG_LEN (101 + 74 * FELUCCA_CDC + 74 * FELUCCA_UAC + 3 * FELUCCA_UAC_48K)
++/* the audio streaming interface's number: the host-compat plain layout puts it before MIDI (AC, AS, MIDI) */
++#define UAC_AS_IF (FELUCCA_UAC_MIDI_LAST ? 1u : 2u)
++/* the AC header loses a byte when its collection stops naming MIDI; the IAD is 8 bytes in the plain build */
++#define AC_SMALL (FELUCCA_UAC && (FELUCCA_UAC_AC_COLLECT || FELUCCA_UAC_MIDI_LAST))
++#define CFG_LEN (101 - AC_SMALL + 8 * FELUCCA_UAC_IAD + 74 * FELUCCA_CDC + 74 * FELUCCA_UAC + 3 * FELUCCA_UAC_48K)
+ #define USB_NIF (2 + FELUCCA_UAC + 2 * FELUCCA_CDC)
++/* the MIDI streaming function at interface m, and (FELUCCA_UAC) the audio streaming function at s */
++#define D_MIDI(m)                                                                                    \
++    9, 4, (m), 0, 2, 1, 3, 0, 0,                                                                     \
++    7, 0x24, 1, 0x00, 0x01, 0x41, 0x00,                                                              \
++    6, 0x24, 2, 1, 1, 0,                                                                             \
++    6, 0x24, 2, 2, 2, 0,                                                                             \
++    9, 0x24, 3, 1, 3, 1, 2, 1, 0,                                                                    \
++    9, 0x24, 3, 2, 4, 1, 1, 1, 0,                                                                    \
++    9, 5, 0x01, 2, 64, 0, 0, 0, 0,                                                                   \
++    5, 0x25, 1, 1, 1,                                                                                \
++    9, 5, 0x81, 2, 64, 0, 0, 0, 0,                                                                   \
++    5, 0x25, 1, 1, 3,
++#if FELUCCA_UAC
++#if FELUCCA_UAC_48K
++#define FMT_LEN 14                          /* type I: 2 ch, 16 bit, 44100 / 48000 */
++#define FMT_NRATES 2
++#define FMT_RATES 0x44, 0xAC, 0x00, 0x80, 0xBB, 0x00
++#else
++#define FMT_LEN 11                          /* type I: 2 ch, 16 bit, one rate */
++#define FMT_NRATES 1
++#define FMT_RATES UAC_RATE & 0xFF, (UAC_RATE >> 8) & 0xFF, UAC_RATE >> 16
++#endif
++#define D_AS(s)                                                                                      \
++    9, 4, (s), 0, 0, 1, 2, 0, 0,                        /* audio streaming, alt 0: no bandwidth */    \
++    9, 4, (s), 1, 1, 1, 2, 0, 0,                        /* alt 1: the stream */                      \
++    7, 0x24, 1, 2, 1, 0x01, 0x00,                       /* AS general: terminal 2, delay 1, PCM */    \
++    FMT_LEN, 0x24, 2, 1, 2, 2, 16, FMT_NRATES, FMT_RATES,                              \
++                                                        /* type I: 2 ch, 16 bit, the rates */        \
++    9, 5, 0x84, 0x05, UAC_MAXP & 0xFF, UAC_MAXP >> 8, 1, 0, 0,   /* EP4 IN isochronous async, 1 ms */ \
++    7, 0x25, 1, 0x01, 0, 0, 0,                          /* CS endpoint: sampling frequency control */
++#endif
+ #if FELUCCA_CDC
+ static const uint8_t DEV_DESC[18] = {18, 1, 0x00, 0x02, 0xEF, 0x02, 0x01, 64, 0x09, 0x12, 0x01, 0x00,
+-                                     0x01 + 0x10 * (FELUCCA_UAC + FELUCCA_UAC_48K) + UAC_BCD_AS, 0x03, 1, 2, 0, 1};   /* misc/IAD */
++                                     0x01 + 0x10 * (FELUCCA_UAC + FELUCCA_UAC_48K) + UAC_BCD_AS + UAC_BCD_HC, 0x03,
++                                     1, 2, FELUCCA_USB_SNUM, 1};   /* misc/IAD */
+ static const uint8_t CFG_DESC[] = {
+     9, 2, CFG_LEN & 0xFF, CFG_LEN >> 8, USB_NIF, 1, 0, 0x80, 50,
+     8, 0x0B, 0, 2 + FELUCCA_UAC, 1, 1, 0, 0,            /* IAD: audio + MIDI (IF 0-1, 0-2) */
+@@ -187,11 +284,20 @@ static const uint8_t CFG_DESC[] = {
+ #ifndef FELUCCA_USB_PID
+ #define FELUCCA_USB_PID 0x0001   /* the update loader is 0x0002 */
+ #endif
+-static const uint8_t DEV_DESC[18] = {18, 1, 0x10, 0x01, 0, 0, 0, 64, 0x09, 0x12, FELUCCA_USB_PID & 0xFF,
+-                                     FELUCCA_USB_PID >> 8, 0x00 + 0x10 * (FELUCCA_UAC + FELUCCA_UAC_48K) + UAC_BCD_AS, 0x03,
+-                                     1, 2, 0, 1};
++/* the plain device: with the audio IAD, bcdUSB 2.00 and the misc/IAD class; else SHIPPED 1.10 / class 0 */
++#if FELUCCA_UAC_IAD
++#define DEV_DESC_USB 0x00, 0x02, 0xEF, 0x02, 0x01
++#else
++#define DEV_DESC_USB 0x10, 0x01, 0, 0, 0
++#endif
++static const uint8_t DEV_DESC[18] = {18, 1, DEV_DESC_USB, 64, 0x09, 0x12, FELUCCA_USB_PID & 0xFF,
++                                     FELUCCA_USB_PID >> 8, 0x00 + 0x10 * (FELUCCA_UAC + FELUCCA_UAC_48K) + UAC_BCD_AS +
++                                     UAC_BCD_HC, 0x03, 1, 2, FELUCCA_USB_SNUM, 1};
+ static const uint8_t CFG_DESC[] = {
+     9, 2, CFG_LEN & 0xFF, CFG_LEN >> 8, USB_NIF, 1, 0, 0x80, 50,
++#if FELUCCA_UAC_IAD
++    8, 0x0B, 0, 1 + FELUCCA_UAC, 1, 1, 0, 0,            /* IAD: the audio function, AC + AS (IF 0-1) */
++#endif
+ #endif
+     9, 4, 0, 0, 0, 1, 1, 0, 0,
+ #if FELUCCA_UAC
+@@ -200,35 +306,28 @@ static const uint8_t CFG_DESC[] = {
+      * MIDI streaming interface from the collection while it walks it with bInCollection's count: MIDI listed
+      * first, the walk runs past the shortened list and gives up before the audio streaming interface, and no
+      * audio input appears (MIDI still works). Listed last, MIDI is dropped at the end. The class spec gives the
+-     * order no meaning (Windows, Linux, macOS 26 take each listed interface on its own) */
+-    10, 0x24, 1, 0x00, 0x01, 31, 0, 2, UAC_AS_IF, 1,
++     * order no meaning (Windows, Linux, macOS 26 take each listed interface on its own).
++     * (FELUCCA_UAC_MIDI_LAST takes MIDI out of the collection: AS_FIRST then has nothing left to reorder.) */
++#if AC_SMALL
++    9, 0x24, 1, 0x00, 0x01, 30, 0, 1, UAC_AS_IF,        /* AC header 1.00: audio streaming only */
++#else
++    10, 0x24, 1, 0x00, 0x01, 31, 0, 2, UAC_AS_IF, 1,    /* AC header 1.00: audio streaming, then MIDI */
++#endif
+     12, 0x24, 2, 1, 0x03, 0x06, 0, 2, 0x03, 0x00, 0, 0, /* input terminal 1: line, 2 ch (L R) */
+     9, 0x24, 3, 2, 0x01, 0x01, 0, 1, 0,                 /* output terminal 2: USB streaming, from 1 */
+ #else
+     9, 0x24, 1, 0x00, 0x01, 9, 0, 1, 1,
+ #endif
+-    9, 4, 1, 0, 2, 1, 3, 0, 0,
+-    7, 0x24, 1, 0x00, 0x01, 0x41, 0x00,
+-    6, 0x24, 2, 1, 1, 0,
+-    6, 0x24, 2, 2, 2, 0,
+-    9, 0x24, 3, 1, 3, 1, 2, 1, 0,
+-    9, 0x24, 3, 2, 4, 1, 1, 1, 0,
+-    9, 5, 0x01, 2, 64, 0, 0, 0, 0,
+-    5, 0x25, 1, 1, 1,
+-    9, 5, 0x81, 2, 64, 0, 0, 0, 0,
+-    5, 0x25, 1, 1, 3,
+-#if FELUCCA_UAC
+-    9, 4, UAC_AS_IF, 0, 0, 1, 2, 0, 0,                  /* IF2 audio streaming, alt 0: no bandwidth */
+-    9, 4, UAC_AS_IF, 1, 1, 1, 2, 0, 0,                  /* alt 1: the stream */
+-    7, 0x24, 1, 2, 1, 0x01, 0x00,                       /* AS general: terminal 2, delay 1, PCM */
+-#if FELUCCA_UAC_48K
+-    14, 0x24, 2, 1, 2, 2, 16, 2, 0x44, 0xAC, 0x00, 0x80, 0xBB, 0x00,   /* type I: 2 ch, 16 bit, 44100 / 48000 */
++#if FELUCCA_UAC && FELUCCA_UAC_MIDI_LAST
++    /* MIDI behind the streams: the audio function is contiguous (AC, AS, MIDI) for the IAD and for the
++     * AppleUSBAudio walk of #67 */
++    D_AS(1)
++    D_MIDI(2)
+ #else
+-    11, 0x24, 2, 1, 2, 2, 16, 1, UAC_RATE & 0xFF, (UAC_RATE >> 8) & 0xFF, UAC_RATE >> 16,
+-                                                        /* type I: 2 ch, 16 bit, one rate */
++    D_MIDI(1)
++#if FELUCCA_UAC
++    D_AS(2)
+ #endif
+-    9, 5, 0x84, 0x05, UAC_MAXP & 0xFF, UAC_MAXP >> 8, 1, 0, 0,   /* EP4 IN isochronous async, 1 ms */
+-    7, 0x25, 1, 0x01, 0, 0, 0,                          /* CS endpoint: sampling frequency control */
+ #endif
+ #if FELUCCA_CDC
+     8, 0x0B, CDC_IF, 2, 2, 2, 1, 0,                     /* IAD: CDC ACM (IF 2-3, 3-4) */
+@@ -253,7 +352,8 @@ typedef char cfg_len_ok[sizeof CFG_DESC == CFG_LEN ? 1 : -1];
+  * are loaded first), so the host sees one device from the start */
+ static uint8_t usb_cdc_on;
+ static const uint8_t DEV_DESC_PLAIN[18] = {18, 1, 0x10, 0x01, 0, 0, 0, 64, 0x09, 0x12, 0x01, 0x00,
+-                                           0x00 + 0x10 * (FELUCCA_UAC + FELUCCA_UAC_48K) + UAC_BCD_AS, 0x03, 1, 2, 0, 1};
++                                           0x00 + 0x10 * (FELUCCA_UAC + FELUCCA_UAC_48K) + UAC_BCD_AS + UAC_BCD_HC, 0x03,
++                                           1, 2, FELUCCA_USB_SNUM, 1};
+ #define CFG_PLAIN_LEN (CFG_LEN - 74)                    /* without the audio IAD (8) and the CDC block (66) */
+ static uint8_t cfg_plain[CFG_PLAIN_LEN];
+ static const uint8_t *cfg_plain_get(void)
+@@ -280,6 +380,26 @@ static const uint8_t STR2[] = {30, 3, 'F', 0, 'e', 0, 'l', 0, 'u', 0, 'c', 0, 'c
+ #else
+ static const uint8_t STR2[] = {16, 3, 'F', 0, 'e', 0, 'l', 0, 'u', 0, 'c', 0, 'c', 0, 'a', 0};
+ #endif
++#if FELUCCA_USB_SNUM
++/* A string descriptor built from a plain ASCII string (FELUCCA_USB_SERIAL, e.g. "FM-1_900"), at most 31
++ * characters. EP0 sends one descriptor at a time, so one buffer serves it. */
++static uint8_t usb_str_buf[2 + 2 * 31];
++
++static int usb_str_desc(const char *s, const uint8_t **d, uint16_t *l)
++{
++    uint32_t n = 0;
++    while (s[n] && n < 31u) {
++        usb_str_buf[2 + 2 * n] = (uint8_t)s[n];
++        usb_str_buf[3 + 2 * n] = 0;
++        n++;
++    }
++    usb_str_buf[0] = (uint8_t)(2 + 2 * n);
++    usb_str_buf[1] = 3;
++    *d = usb_str_buf;
++    *l = (uint16_t)(2 + 2 * n);
++    return 1;
++}
++#endif
+ 
+ #if FELUCCA_UAC_48K
+ /* SLOOP 2.7 beta: menu AUDIO > USB RATE, for the hosts that record the stream badly (reports: Android phones,
+@@ -373,6 +493,12 @@ static int get_desc(uint32_t wvalue, const uint8_t **d, uint16_t *l)
+             *d = STR2;
+             *l = sizeof STR2;
+             return 1;
++        case 3:
++#if FELUCCA_USB_SNUM
++            return usb_str_desc(FELUCCA_USB_SERIAL, d, l);
++#else
++            return 0;                                  /* no serial number (iSerialNumber 0) */
++#endif
+         default:
+             return 0;
+         }
+diff --git a/tests/run_tests.sh b/tests/run_tests.sh
+index 0914c1a..5391292 100644
+--- a/tests/run_tests.sh
++++ b/tests/run_tests.sh
+@@ -130,6 +130,16 @@ run "USB RATE 44.1: the descriptors of a build without 48 kHz (SLOOP 2.4), byte
+     sh -c "[ \"\$(UAC_DUMP=1 '$OUT/uac_test_441' | tail -n 2)\" = \"\$(UAC_DUMP=1 '$OUT/uac_test_no48' | tail -n 2)\" ] && echo same"
+ uac_in_app() { ${CC%% *} -E -Ibuild/gen -Ifirmware/hal -Ifirmware/src firmware/src/felucca.c 2>/dev/null | grep -q uac_service; }
+ run "USB audio input: built into the firmware (FELUCCA_UAC set before usb.c)" uac_in_app
++# the fm-1-experiments host-compat set (FELUCCA_UAC_MIDI_LAST / FELUCCA_UAC_IAD / FELUCCA_USB_SERIAL),
++# the plain build scripts/build-sloop.sh makes: order AC, AS, MIDI, the AC collection naming the
++# stream only, the audio IAD over AC + AS, and the serial string. The stock layout is SLOOP 2.7.2's.
++for v in 1.1 1.0 0.0; do
++    IFS=. read -r t_ml t_iad <<EOF
++$v
++EOF
++    $CC -w -DHALF_FRAMES=$HALF -DT_ML=$t_ml -DT_IAD=$t_iad -o "$OUT/usb_compat_test" tests/usb_compat_test.c
++    run "USB host compat: MIDI_LAST $t_ml, IAD $t_iad (descriptors)" "$OUT/usb_compat_test"
++done
+ 
+ $CC -o "$OUT/ota_test" tests/ota_test.c
+ run "M-UPGRADE entry" "$OUT/ota_test" build/felucca.fwsc
+diff --git a/tests/usb_compat_test.c b/tests/usb_compat_test.c
+new file mode 100644
+index 0000000..46839b6
+--- /dev/null
++++ b/tests/usb_compat_test.c
+@@ -0,0 +1,146 @@
++/* SPDX-License-Identifier: GPL-3.0-only
++ * Copyright (C) 2026 Jan Forst */
++/* Host-side test of the fm-1-experiments USB descriptors (FELUCCA_UAC_AC_COLLECT,
++ * FELUCCA_UAC_MIDI_LAST, FELUCCA_UAC_IAD, FELUCCA_USB_SERIAL), the set scripts/build-sloop.sh ships: a
++ * plain build (FELUCCA_CDC=0, FELUCCA_UAC=1, 48 kHz) with the MIDI function behind the streaming
++ * interfaces, and optionally the audio function's IAD. One build per variant:
++ *   -DT_ML=0/1 (FELUCCA_UAC_MIDI_LAST)  -DT_IAD=0/1 (FELUCCA_UAC_IAD)
++ * The device and configuration descriptors come from get_desc(), as GET_DESCRIPTOR sends them: order
++ * AC, AS, MIDI (with MIDI_LAST) or AC, MIDI, AS (stock: SLOOP 2.7.2's AS-first collection, which is not
++ * enough on macOS 13-15), the AC collection, the IAD (AC + AS, never MIDI), the device class, UAC_AS_IF,
++ * bcdDevice's flag bits and string descriptor 3 (the serial). */
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++#ifndef HALF_FRAMES
++#error "-DHALF_FRAMES=n (src/core.h; run_tests.sh passes it)"
++#endif
++#define RING_PUBLISH() __asm__ volatile("" ::: "memory")
++#define FELUCCA_OTA 0
++#define FELUCCA_CDC 0
++#define FELUCCA_UAC 1
++#ifndef T_ML
++#define T_ML 1
++#endif
++#ifndef T_IAD
++#define T_IAD 1
++#endif
++#define FELUCCA_UAC_MIDI_LAST T_ML
++#define FELUCCA_UAC_IAD T_IAD
++#define FELUCCA_ID "FM-1_900"
++static void fm1_delay_ms(uint32_t ms) { (void)ms; }
++#pragma GCC diagnostic ignored "-Wint-to-pointer-cast"   /* SIE register macros (never touched here) */
++#include "../firmware/src/usb.c"
++
++static int fails;
++static void check(const char *what, int ok)
++{
++    printf("%-72s %s\n", what, ok ? "ok" : "FAIL");
++    if (!ok)
++        fails++;
++}
++
++static uint32_t le16(const uint8_t *p) { return p[0] | (uint32_t)p[1] << 8; }
++
++int main(void)
++{
++    const uint8_t *dev, *c, *sd;
++    uint16_t dev_len, n, sd_len;
++    uint32_t off, i, ac = 99, as = 99, midi = 99, nif = 0, niad = 0;
++    uint32_t ac_class = 0, as_class = 0, midi_class = 0, coll_n = 0, coll[4] = {0};
++    uint32_t iad_first = 0, iad_n = 0, iad_cls = 0, iad_sub = 0, iad_proto = 0;
++    uint32_t midi_out = 0, midi_in = 0, audio_in = 0;
++    int ac_hdr = 0;
++
++    printf("-- USB host-compat descriptors: MIDI_LAST %d, IAD %d\n", T_ML, T_IAD);
++    check("GET_DESCRIPTOR device", get_desc(0x0100, &dev, &dev_len) && dev_len == 18 && dev[0] == 18);
++    check("GET_DESCRIPTOR configuration", get_desc(0x0200, &c, &n) && c[1] == 2 && le16(c + 2) == n);
++    check("GET_DESCRIPTOR string 3 (the serial)", get_desc(0x0303, &sd, &sd_len) && sd_len == 2 + 2 * 8);
++
++    /* ---- the device ---- */
++    if (T_IAD)
++        check("misc / IAD: bcdUSB 2.00, class EF 02 01",
++              le16(dev + 2) == 0x0200 && dev[4] == 0xEF && dev[5] == 2 && dev[6] == 1);
++    else
++        check("no IAD: bcdUSB 1.10, class 00 00 00",
++              le16(dev + 2) == 0x0110 && !dev[4] && !dev[5] && !dev[6]);
++    check("iSerialNumber 3", dev[16] == 3);
++    {
++        /* 0.28: +0x10 the audio input, +0x20 the 48 kHz rate, +0x08 AS_FIRST, +0x04 MIDI_LAST, +0x40 IAD */
++        uint32_t bcd = 0x0328u + 0x04u * T_ML + 0x40u * T_IAD;
++        char name[64];
++        snprintf(name, sizeof name, "bcdDevice 0.%02X (a bit per layout flag)", bcd & 0xFFu);
++        check(name, le16(dev + 12) == bcd);
++    }
++    {
++        uint32_t k, ok = sd_len == 2 + 2 * strlen(FELUCCA_ID);
++        for (k = 0; ok && k < strlen(FELUCCA_ID); k++)
++            ok = sd[2 + 2 * k] == (uint8_t)FELUCCA_ID[k] && sd[3 + 2 * k] == 0;
++        check("serial string 3 = FELUCCA_ID in UTF-16LE", ok && sd[0] == sd_len && sd[1] == 3);
++    }
++
++    /* ---- the configuration, walked as a host does ---- */
++    for (off = 9; off < n; off += c[off]) {
++        const uint8_t *d = c + off;
++        if (d[0] < 2 || off + d[0] > n) {
++            check("descriptor lengths add up to wTotalLength", 0);
++            return 1;
++        }
++        if (d[1] == 0x0B) {                            /* IAD */
++            iad_first = d[2];
++            iad_n = d[3];
++            iad_cls = d[4];
++            iad_sub = d[5];
++            iad_proto = d[6];
++            niad++;
++        } else if (d[1] == 4) {                         /* interface */
++            nif++;
++            if (d[5] == 1 && d[6] == 1) {
++                ac = d[2];
++                ac_class = d[5];
++                ac_hdr = 1;
++            } else if (d[5] == 1 && d[6] == 2) {
++                as = d[2];
++                as_class = d[5];
++            } else if (d[5] == 1 && d[6] == 3) {
++                midi = d[2];
++                midi_class = d[5];
++            }
++        } else if (d[1] == 0x24 && d[2] == 1 && ac_hdr) {   /* AC header */
++            coll_n = d[7];
++            for (i = 0; i < coll_n && i < 4; i++)
++                coll[i] = d[8 + i];
++            ac_hdr = 0;
++        } else if (d[1] == 5 && d[0] == 9) {            /* endpoint */
++            if (d[2] == 0x01 && d[3] == 2)
++                midi_out++;
++            else if (d[2] == 0x81 && d[3] == 2)
++                midi_in++;
++            else if (d[2] == 0x84 && d[3] == 5)
++                audio_in++;
++        }
++    }
++    check("three interfaces numbered 0..2 (four settings: AS alt 0 / alt 1)",
++          c[4] == 3 && nif == 4 && ac == 0 && as + midi == 3);
++    if (T_ML)
++        check("interface order AC, AS, MIDI (the fix: MIDI behind the streams)", as == 1 && midi == 2);
++    else
++        check("interface order AC, MIDI, AS (upstream, the macOS 13-15 bug)", midi == 1 && as == 2);
++    check("AC and the streams are one audio function",
++          ac_class == 1 && as_class == 1 && midi_class == 1);
++    check(T_ML ? "AC collection names the streaming interface only"
++               : "AC collection names the streaming and the MIDI interface",
++          T_ML ? coll_n == 1 && coll[0] == as : coll_n == 2 && coll[0] == as && coll[1] == midi);
++    check("UAC_AS_IF = the audio streaming interface", UAC_AS_IF == as);
++    check("endpoints: MIDI 0x01 / 0x81 bulk, audio 0x84", midi_out == 1 && midi_in == 1 && audio_in == 1);
++    if (T_IAD) {
++        check("one IAD, at the front, class 1 / 1 / 0", niad == 1 && iad_cls == 1 && iad_sub == 1 && iad_proto == 0);
++        check("the IAD covers AC + AS, never MIDI", iad_first == ac && iad_n == 2 &&
++              !(midi >= iad_first && midi < iad_first + iad_n));
++    } else {
++        check("no IAD", niad == 0);
++    }
++
++    printf("%s\n", fails ? "USB COMPAT TEST FAILED" : "usb compat test passed");
++    return fails ? 1 : 0;
++}
+diff --git a/tools/build.py b/tools/build.py
+index 9297331..b42708d 100644
+--- a/tools/build.py
++++ b/tools/build.py
+@@ -180,7 +180,8 @@ def build_loader():
+ def build_app():
+     flags = [*CFLAGS, "-Ifirmware/hal", "-Ifirmware/src", "-Ibuild/gen"]
+     for flag in ("FELUCCA_FLASH", "FELUCCA_OTA", "FELUCCA_OTA_DRYRUN", "FELUCCA_CDC", "FELUCCA_UART",
+-                 "FELUCCA_ICONS", "FELUCCA_SLICE", "FELUCCA_CPU1", "FELUCCA_LOGO_TEXT"):
++                 "FELUCCA_ICONS", "FELUCCA_SLICE", "FELUCCA_CPU1", "FELUCCA_LOGO_TEXT",
++                 "FELUCCA_UAC_AC_COLLECT", "FELUCCA_UAC_MIDI_LAST", "FELUCCA_UAC_IAD"):
+         v = os.environ.get(flag)    # unset: the default in firmware/src/felucca.c
+         if v in ("0", "1"):
+             flags.append(f"-D{flag}={v}")
+-- 
+2.55.0
+
