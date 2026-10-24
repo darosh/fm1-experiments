@@ -179,10 +179,11 @@ revisions.env                the pins
 ```
 
 The submodule paths are **symlinks**, not real checkouts: one copy of each repo, and patches are
-applied once. The trade-off is that `git status` inside a clone with such a link fails with
-`expected submodule path 'base' not to be a symbolic link` — run git in `clones/<repo>` itself
-(or with `--no-recurse-submodules`) instead. The build does not care; `build.py` resolves the
-`bsp` link when it computes its source root (patch 03).
+applied once. Git records those paths as submodules, so `setup.sh` sets
+`diff.ignoreSubmodules=all` in each clone; without it, `git status` there fails with
+`expected submodule path 'base' not to be a symbolic link` (and an IDE lists the path as a
+permanent change). The build does not care; `build.py` resolves the `bsp` link when it computes
+its source root (patch 03).
 
 ---
 
@@ -335,7 +336,7 @@ firmware installed over USB-MIDI keeps whatever SPL is already on the device. V1
 
 | symptom | cause / fix |
 |---|---|
-| `expected submodule path 'base' not to be a symbolic link` | run git in `clones/<repo>` itself or with `--no-recurse-submodules`, not in the parent |
+| `expected submodule path 'base' not to be a symbolic link` | run `setup.sh` (it sets `diff.ignoreSubmodules=all` in each clone); otherwise `git -C clones/<repo> status --ignore-submodules=all` |
 | `build: cannot start the toolchain container` | Docker not running; or the tree is outside `/Users` (file sharing) |
 | `JIELI_TOOLCHAIN must point at ...` | run `clones/fm1-base/tools/get_toolchain.sh` |
 | `warning: toolchain package ...; revisions.env pins ...` | the toolchain is not the pinned build; re-run `get_toolchain.sh` (newest) or update the pin |

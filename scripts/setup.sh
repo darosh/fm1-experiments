@@ -56,6 +56,11 @@ link() {  # LINK TARGET
 link "$CLONES/fm1-loom/base" "../fm1-base"
 link "$CLONES/fm1-amb/base"  "../fm1-base"
 link "$CLONES/fm1-base/bsp"  "../felucca-bsp"
+# git records those paths as submodules (gitlinks); the symlink is not one, and without this every
+# `git status` in a clone fails (and an IDE shows the path as a permanent change in that repo).
+for dir in "$CLONES"/*; do
+    [ -d "$dir/.git" ] && git -C "$dir" config diff.ignoreSubmodules all
+done
 say "linked   fm1-loom/base, fm1-amb/base -> ../fm1-base; fm1-base/bsp -> ../felucca-bsp"
 
 # --------------------------------------------------------------- patches ---
