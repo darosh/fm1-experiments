@@ -1,0 +1,55 @@
+From f6b8031519024d649f343349fd74ad0a2474937e Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Sat, 24 Oct 2026 13:46:03 +0200
+Subject: [PATCH 3/3] build.py: the container mount covers a symlinked engines
+ submodule
+
+firmware/engines may be a symlink to a clone outside this tree (fm-1-experiments keeps one
+Felucca-Engines for every checkout). The container mounted only SRC, so the link dangled in it and
+the compile failed on the engines' sources. Mount the common parent of SRC and the resolved engines
+checkout and work in SRC inside it; paths outside SRC become one `..` step, which resolves inside the
+mount too. Native builds (Linux x86-64) are unchanged.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ tools/build.py | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/tools/build.py b/tools/build.py
+index ada2ff3..7435813 100755
+--- a/tools/build.py
++++ b/tools/build.py
+@@ -26,6 +26,12 @@ from concurrent.futures import ThreadPoolExecutor
+ from pathlib import Path
+ 
+ SRC = Path(__file__).resolve().parents[1]
++# The container mounts the common parent of this tree and its engines checkout: firmware/engines may be
++# a symlink to a clone outside SRC (this tree shares one Felucca-Engines between checkouts), and Docker
++# does not resolve a symlink that leaves the bind mount. The workdir is SRC inside that mount, so the
++# -Ifirmware/... flags and the relative paths the tools write keep their meaning.
++ROOT = Path(os.path.commonpath([SRC, (SRC / "firmware" / "engines").resolve()]))
++WORK = f"/work/{SRC.relative_to(ROOT)}"
+ FW = SRC / "firmware"
+ OUT = SRC / "build"
+ GEN = OUT / "gen"
+@@ -76,12 +82,14 @@ def use_docker():
+ 
+ def tc(tool, *args):
+     """run a toolchain binary (pi32v2/bin/..., common/bin/...) with cwd SRC; paths relative to SRC"""
+-    rel = [str(Path(a).resolve().relative_to(SRC)) if isinstance(a, Path) else a for a in args]
++    # a path outside SRC (a source under the symlinked firmware/engines) is addressed through the
++    # mount's parent: one `..` step, which resolves inside the container as well (see ROOT above)
++    rel = [os.path.relpath(Path(a).resolve(), SRC) if isinstance(a, Path) else a for a in args]
+     if tool == "cc":                # the toolchain's cc wrapper needs python3; call clang directly
+         tool, rel = "pi32v2/bin/clang", ["-target", "pi32v2", *rel]
+     if use_docker():
+-        cmd = ["docker", "run", "--rm", "--platform", "linux/amd64", "-v", f"{SRC}:/work",
+-               "-v", f"{toolchain()}:/opt/jieli:ro", "-w", "/work", DOCKER_IMAGE, f"/opt/jieli/{tool}", *rel]
++        cmd = ["docker", "run", "--rm", "--platform", "linux/amd64", "-v", f"{ROOT}:/work",
++               "-v", f"{toolchain()}:/opt/jieli:ro", "-w", WORK, DOCKER_IMAGE, f"/opt/jieli/{tool}", *rel]
+     else:
+         cmd = [str(toolchain() / tool), *rel]
+     r = subprocess.run(cmd, cwd=SRC, capture_output=True, text=True)
+-- 
+2.55.0
+

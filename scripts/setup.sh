@@ -34,10 +34,12 @@ clone_repo() {  # NAME URL COMMIT
     fi
 }
 
-clone_repo felucca-bsp "$FELUCCA_BSP_URL" "$FELUCCA_BSP_COMMIT"
-clone_repo fm1-base    "$FM1_BASE_URL"    "$FM1_BASE_COMMIT"
-clone_repo fm1-loom    "$FM1_LOOM_URL"    "$FM1_LOOM_COMMIT"
-clone_repo fm1-amb     "$FM1_AMB_URL"     "$FM1_AMB_COMMIT"
+clone_repo felucca-bsp    "$FELUCCA_BSP_URL"     "$FELUCCA_BSP_COMMIT"
+clone_repo felucca-engines "$FELUCCA_ENGINES_URL" "$FELUCCA_ENGINES_COMMIT"
+clone_repo fm1-base       "$FM1_BASE_URL"        "$FM1_BASE_COMMIT"
+clone_repo fm1-loom       "$FM1_LOOM_URL"        "$FM1_LOOM_COMMIT"
+clone_repo fm1-amb        "$FM1_AMB_URL"         "$FM1_AMB_COMMIT"
+clone_repo felucca        "$FELUCCA_URL"         "$FELUCCA_COMMIT"
 
 # --------------------------------------------------------------- symlinks ---
 # The build needs <firmware>/base -> fm1-base and fm1-base/bsp -> felucca-bsp. Symlinks (rather
@@ -56,12 +58,14 @@ link() {  # LINK TARGET
 link "$CLONES/fm1-loom/base" "../fm1-base"
 link "$CLONES/fm1-amb/base"  "../fm1-base"
 link "$CLONES/fm1-base/bsp"  "../felucca-bsp"
+link "$CLONES/felucca/firmware/engines" "../../felucca-engines"
 # git records those paths as submodules (gitlinks); the symlink is not one, and without this every
 # `git status` in a clone fails (and an IDE shows the path as a permanent change in that repo).
 for dir in "$CLONES"/*; do
     [ -d "$dir/.git" ] && git -C "$dir" config diff.ignoreSubmodules all
 done
-say "linked   fm1-loom/base, fm1-amb/base -> ../fm1-base; fm1-base/bsp -> ../felucca-bsp"
+say "linked   fm1-loom/base, fm1-amb/base -> ../fm1-base; fm1-base/bsp -> ../felucca-bsp;"
+say "         felucca/firmware/engines -> ../felucca-engines"
 
 # --------------------------------------------------------------- patches ---
 # patches/<repo>/<NN-problem>/NNNN-*.patch, problem dirs in sorted order (the numeric prefix is
@@ -93,6 +97,7 @@ else
     apply_patches fm1-base
     apply_patches fm1-loom
     apply_patches fm1-amb
+    apply_patches felucca
 fi
 
 # ------------------------------------------------------------------ venv ---
@@ -103,7 +108,7 @@ if [ ! -x "$ROOT/.venv/bin/python" ]; then
     "$PYBIN" -m venv --system-site-packages "$ROOT/.venv"
 fi
 "$ROOT/.venv/bin/pip" install --quiet --disable-pip-version-check \
-    "mido==$PY_MIDO_VERSION" "python-rtmidi==$PY_RTMIDI_VERSION"
+    "mido==$PY_MIDO_VERSION" "python-rtmidi==$PY_RTMIDI_VERSION" "fonttools==$PY_FONTTOOLS_VERSION"
 if ! "$ROOT/.venv/bin/python" -c 'import PIL.features as f,sys; sys.exit(0 if f.check("raqm") else 1)' 2>/dev/null; then
     say "warning: Pillow without libraqm in the venv; the fonts need it (brew install pillow)"
 fi
@@ -147,3 +152,4 @@ say "ready. Build/deploy one firmware at a time (README section 2):"
 say "  scripts/build-loom.sh       scripts/deploy-loom.sh       scripts/verify-loom.sh"
 say "  scripts/build-amb.sh        scripts/deploy-amb.sh        scripts/verify-amb.sh"
 say "  scripts/build-template.sh   scripts/deploy-template.sh   scripts/verify-base.sh"
+say "  scripts/build-felucca.sh    scripts/deploy-felucca.sh    scripts/verify-felucca.sh"

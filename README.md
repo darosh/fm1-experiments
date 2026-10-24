@@ -1,14 +1,16 @@
 # fm-1-experiments
 
 Scratch repo for M-VAVE FM-1 firmware experiments, maintained mostly by an LLM following this
-file. It pins four upstream repositories at known commits, keeps our changes as patch series, and
+file. It pins six upstream repositories at known commits, keeps our changes as patch series, and
 gives each firmware its own build, verify and deploy script.
 
-Two firmwares are built here, both on the shared fm1-base: **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom))
-and **AMB-1** ([fm1-amb](https://github.com/charlesvestal/fm1-amb)). fm1-base's own **template**
-firmware is built too, as the platform's reference app.
+Three firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
+**AMB-1** ([fm1-amb](https://github.com/charlesvestal/fm1-amb)) sit on the shared fm1-base; fm1-base's
+own **template** firmware is built too, as the platform's reference app. **Felucca**
+([Felucca](https://github.com/hugelton/Felucca)) is standalone: it carries its own platform under
+`firmware/` and does not use fm1-base or felucca-bsp.
 
-The current experiment is **USB host compatibility**: LOOM-8 and AMB-1 built from these patches have a
+The current experiment is **USB host compatibility**: the firmwares built from these patches have a
 working USB audio input and a correctly named USB-MIDI port on macOS, Windows, Linux, Android and
 iPadOS. Nothing here is pushed upstream.
 
@@ -22,7 +24,7 @@ iPadOS. Nothing here is pushed upstream.
 | Rosetta (Apple silicon) | the build container is `linux/amd64` | `softwareupdate --install-rosetta --agree-to-license` |
 | JieLi toolchain | `clang` for `pi32v2` | after the first `setup.sh`: `clones/fm1-base/tools/get_toolchain.sh` (installs `~/.jieli/toolchain`; the pinned package is `jieli-linux-toolchains-20260730.1`) |
 | AC79 SDK | SPL, `cfg_tool.bin`, EQ table for packaging | see below |
-| Python with Pillow+raqm | fonts, screen-reader words | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`) |
+| Python with Pillow+raqm and fontTools | fonts, screen-reader words; Felucca rasterises its UI font at build time | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools |
 
 The SDK is ~1.4 GB and is **not** cloned into this repo:
 
@@ -132,6 +134,36 @@ the USB-only template (`--no-ble`) unless you pass `--host`, `--web` or `--no-bl
 `verify-base.sh` runs fm1-base's whole suite; after `build-template.sh` its update-path test runs
 against the USB-only package (it borrows the `template.fwsc` name the test looks for).
 
+### Felucca (hugelton/Felucca)
+
+Build; writes `clones/felucca/build/felucca.fwsc`:
+
+```sh
+./scripts/build-felucca.sh
+```
+
+Felucca's host tests (the engines' goldens, USB audio and descriptors, the UI renders, the update
+path, the installer; run a build first — several need `build/felucca.fwsc` and `build/gen`):
+
+```sh
+./scripts/verify-felucca.sh
+```
+
+Flash (`--info` prints the connected FM-1's identity and writes nothing):
+
+```sh
+./scripts/deploy-felucca.sh
+```
+
+Felucca is **not** an fm1-base firmware: it vendors its own platform (`firmware/hal`, `firmware/src`,
+including its own USB stack) and its only submodule is `firmware/engines` (Felucca-Engines). It builds
+with the USB host-compat descriptor set: `build-felucca.sh` exports `FELUCCA_CDC=0` (no serial console)
+and the plain-build flags `FELUCCA_UAC_MIDI_LAST=1`, `FELUCCA_UAC_IAD=1`; the serial number follows the
+package identity (`FELUCCA_ID`, `FM-1_900`). `build-felucca.sh` passes `--release X.Y` and `--sdk DIR`
+through; export `FELUCCA_CDC=1` for the console layout (then clear the two plain-build flags — they
+`#error` on CDC builds). In the USB-only build MENU > USB SERIAL is still listed but does nothing:
+the console it would switch is not compiled in.
+
 ---
 
 ## 3. Pinned revisions
@@ -144,16 +176,20 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 | `charlesvestal/fm1-amb` | `188b0a42` (v1.3) | AMB-1 |
 | `charlesvestal/fm1-base` | `0944289` | the platform layer (both firmwares' `base`) |
 | `hugelton/felucca-bsp` | `b413cd8` | the chip layer (`fm1-base/bsp`) |
+| `hugelton/Felucca` | `63f88ec` | Felucca (main, 5 commits past v1.6.1) |
+| `hugelton/Felucca-Engines` | `c46e008` | Felucca's `firmware/engines` submodule |
 | AC79 SDK | tag `AC79NN_SDK_V1.2.14_2026-10-13` | external, outside this repo |
 | JieLi toolchain | package `jieli-linux-toolchains-20260730.1` | external, outside this repo |
 | docker base | `debian:bookworm-slim@sha256:7ff6ba3…` | the build container's image, `JIELI_DOCKER_IMAGE` |
-| python | `mido 1.3.3`, `python-rtmidi 1.5.8` | `.venv`, installed by `setup.sh` |
+| python | `mido 1.3.3`, `python-rtmidi 1.5.8`, `fonttools 4.66.1` | `.venv`, installed by `setup.sh` |
 
-The repos are pinned to their latest `main` (both firmwares are at their latest release tag).
-One fm1-base and one felucca-bsp are shared by both firmwares, so the base is pinned to its own
-`main` rather than to either firmware's submodule pointer (`42dc630` for LOOM-8, `15dff6d` for
-AMB-1 — both are ancestors of the pin). The SDK tag and the toolchain package are the newest
-published.
+The repos are pinned to their latest `main` (LOOM-8 and AMB-1 are at their latest release tag).
+One fm1-base and one felucca-bsp are shared by both fm1-base firmwares, so the base is pinned to its
+own `main` rather than to either firmware's submodule pointer (`42dc630` for LOOM-8, `15dff6d` for
+AMB-1 — both are ancestors of the pin). Felucca-Engines is pinned to the commit Felucca's own tree
+names, not to engines `main`: engines `main` adds the PHASE engine and an FS-rate refactor, while
+Felucca has its own `firmware/src/eng_phase.c` and goldens that pair with the older sources. The SDK
+tag and the toolchain package are the newest published.
 
 ---
 
@@ -168,6 +204,9 @@ clones/                      ignored; scripts/setup.sh creates it
   fm1-base/                  pinned checkout, branch "experiments"
     bsp -> ../felucca-bsp    symlink
   felucca-bsp/               pinned checkout, branch "experiments"
+  felucca/                   pinned checkout, branch "experiments" (standalone: no base/bsp)
+    firmware/engines -> ../../felucca-engines   symlink
+  felucca-engines/           pinned checkout, branch "experiments"
 patches/<repo>/<NN-problem>/NNNN-*.patch
 scripts/
   setup.sh                   clones, links, patches, venv, prerequisite report
@@ -175,6 +214,7 @@ scripts/
   build-loom.sh   deploy-loom.sh   verify-loom.sh
   build-amb.sh    deploy-amb.sh    verify-amb.sh
   build-template.sh  deploy-template.sh  verify-base.sh
+  build-felucca.sh   deploy-felucca.sh   verify-felucca.sh
 revisions.env                the pins
 ```
 
@@ -182,8 +222,9 @@ The submodule paths are **symlinks**, not real checkouts: one copy of each repo,
 applied once. Git records those paths as submodules, so `setup.sh` sets
 `diff.ignoreSubmodules=all` in each clone; without it, `git status` there fails with
 `expected submodule path 'base' not to be a symbolic link` (and an IDE lists the path as a
-permanent change). The build does not care; `build.py` resolves the `bsp` link when it computes
-its source root (patch 03).
+permanent change). The builds do not care: fm1-base's `build.py` resolves the `bsp` link when it
+computes its source root, and Felucca's mounts the common parent of `felucca/` and its engines
+checkout (patches 03 in each set).
 
 ---
 
@@ -198,6 +239,9 @@ patches/
   fm1-base/04-esm-modules/          package.json: the web/ modules are ESM
   fm1-loom/01-usb-host-compat/      LOOM-8's USB names and its descriptor flags
   fm1-amb/01-usb-host-compat/       AMB-1's: the same descriptor set, and its USB names
+  felucca/01-usb-host-compat/       usb.c: MIDI behind the streams, the audio IAD, a serial; descriptor test
+  felucca/02-sdk-v1.2.14/           build.py: the SDK hashes of the installed V1.2.14
+  felucca/03-symlinked-engines/     build.py: the container mount covers a symlinked engines submodule
 ```
 
 - Generated with `git format-patch`, applied with `git am --3way`, so the commit messages and
@@ -256,6 +300,11 @@ mid-session: `git -C clones/<repo> am --abort` (and `am --show-current-patch` to
 code lives in `bsp/chip/usb.c`, so one fix there reaches LOOM-8, AMB-1, the template and anything
 else on the bsp.
 
+Felucca is a separate chain: it vendors its own platform under `firmware/` — including its own,
+diverged copy of the USB stack (`firmware/src/usb.c`, a GPL-3.0 descendant of `bsp/chip/usb.c`'s
+descriptor code) — and its only submodule is `firmware/engines` (Felucca-Engines). The bsp patches
+do not reach it; the USB fix is ported into its own `usb.c` and its own build script.
+
 ### Bug 1 — no USB audio input on macOS 13–15
 
 Upstream: [hugelton/Felucca#67](https://github.com/hugelton/Felucca/issues/67),
@@ -281,6 +330,22 @@ The shipped builds also carry `FELUCCA_UAC_IAD` (`usb_iad`), which gives the aud
 covering AC + AS only. It is descriptor hygiene, not a host fix: the plain no-IAD build enumerates
 on every host we tried too, and the flag is there so the audio interfaces are explicitly one
 function.
+
+### Felucca — the same bug, fixed differently upstream
+
+Upstream Felucca already has a fix for #67, `FELUCCA_UAC_AS_FIRST` (default on since 1.6): it lists
+the streaming interface before MIDI **inside the AC header's collection** but leaves the interface
+order `AC, MIDI, AS`. That is variant C above plus the old order — and a stock Felucca build's USB
+audio input does not appear on macOS 15 (tested on the device). Its own MENU > USB SERIAL OFF, which
+re-enumerates as a plain audio + MIDI device (`FELUCCA_CDC=0`'s descriptors), does not help either,
+for the same reason: it keeps the old order.
+
+`patches/felucca/01-usb-host-compat` therefore ports the same three changes into Felucca's own
+`usb.c`: `FELUCCA_UAC_MIDI_LAST` (the fix), `FELUCCA_UAC_IAD` (hygiene) and `FELUCCA_USB_SERIAL`
+(bug 2). They default to 0, so upstream's byte-for-byte descriptor tests keep passing;
+`build-felucca.sh` exports them, with `FELUCCA_CDC=0` — the serial console is a developer tool and
+its CDC composite is the layout macOS 13–15 mis-attaches, so it is compiled out. Build the console
+variant with `FELUCCA_CDC=1` (and no MIDI_LAST/IAD) if you want it.
 
 ### Bug 2 — stale MIDI device name (AMB-1 stuck on LOOM-8)
 
@@ -329,6 +394,10 @@ firmware installed over USB-MIDI keeps whatever SPL is already on the device. V1
   pinned V1.2.14.
 - The GUI arm of the bsp (`FELUCCA_USB_LAYOUT`, CDC console) is orthogonal and untested here; the
   new flags `#error` on CDC builds rather than multiplying the matrix.
+- Felucca's `build.py` mounts its own tree in the container; a symlinked `firmware/engines` needs the
+  common parent mounted instead (its patch 03). Felucca also generates its UI font at build time, so
+  the venv needs `fontTools` (the 48 kHz FIR, `chip/uac_fir.h`'s equivalent, **is** in Felucca's
+  `firmware/src`).
 
 ---
 
@@ -343,9 +412,10 @@ firmware installed over USB-MIDI keeps whatever SPL is already on the device. V1
 | `warning: SDK ... differs` | SDK is not at the pinned tag; re-clone the SDK or update the pin **and** `SDK_SHA256` |
 | patches fail after a pin bump | expected; use `setup.sh --no-patches` and regenerate them (§6) |
 | `error: ... neither applies nor is already applied` mid-session | `git -C clones/<repo> am --abort` |
+| `firmware/engines is empty` | run `setup.sh` (it links `clones/felucca/firmware/engines` to `clones/felucca-engines`) |
 | `deploy-*.sh: no package in ...` | run the matching build first; a release build is named `NAME-X.Y.fwsc` and is picked automatically |
 | template build: `undefined reference to usr_timeout_del` | the pinned SDK cannot link the BLE template; use the script's default `--no-ble` (or SDK V1.2.1) |
-| macOS shows the old MIDI name | CoreMIDI caches per VID/PID/serial: unplug, delete the stale entry in Audio MIDI Setup → MIDI Studio, replug |
+| macOS shows the old MIDI name | CoreMIDI caches per VID/PID/serial: unplug, delete the stale entry in Audio MIDI Setup → MIDI Studio, replug. Each build here reports its identity as the serial, so switching between LOOM-8, AMB-1 and Felucca gives distinct entries |
 | Linux card named "pid.codes Test PID" | host-side naming; see the pid.codes note above |
 
 ## 9. Recovery

@@ -49,6 +49,21 @@ run_tests() {  # REPO SLUG
     [ "$rc" = 0 ] || die "$rc failing check(s)"
 }
 
+# Run a suite that reports through its exit status instead of fm1-base's "  FAIL" lines (Felucca's
+# run_tests.sh prints "== <name>" and ends with ALL HOST TESTS PASSED / HOST TESTS FAILED). POSIX sh
+# has no pipefail and `cmd | tee` reports tee, so the status travels through a file.
+run_tests_exit() {  # REPO SLUG
+    mkdir -p "$ROOT/.logs"
+    log="$ROOT/.logs/verify-$2-$(date +%Y%m%d-%H%M%S).log"
+    st="$ROOT/.logs/.verify-$2.$$"
+    ( cd "$ROOT/clones/$1" && CC="${CC:-cc}" PYTHON="$PYTHON" sh tests/run_tests.sh; echo $? >"$st" ) 2>&1 | tee "$log"
+    rc=$(cat "$st" 2>/dev/null || echo 1)
+    rm -f "$st"
+    printf '\nlog: %s\n' "$log"
+    [ "$rc" = 0 ] && grep -q 'ALL HOST TESTS PASSED' "$log" \
+        || die "the suite failed (exit $rc), see $log"
+}
+
 show_package() {  # PACKAGE (ignored when empty)
     [ -n "${1:-}" ] && [ -f "$1" ] || return 0
     printf '\npackage  %s  %s bytes\n' "$1" "$(wc -c <"$1" | tr -d ' ')"
