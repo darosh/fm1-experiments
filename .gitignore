@@ -8,3 +8,5 @@ clones/
 # editor
 .idea/
 .DS_Store
+# python bytecode
+__pycache__/

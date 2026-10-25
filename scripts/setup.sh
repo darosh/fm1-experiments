@@ -46,6 +46,45 @@ clone_repo sloop          "$SLOOP_URL"           "$SLOOP_COMMIT"
 clone_repo dinghy         "$DINGHY_URL"          "$DINGHY_COMMIT"
 clone_repo cs1            "$CS1_URL"             "$CS1_COMMIT"
 clone_repo melodee        "$MELODEE_URL"         "$MELODEE_COMMIT"
+clone_repo mutable-dreams "$MUTABLE_DREAMS_URL"  "$MUTABLE_DREAMS_COMMIT"
+
+# Some upstreams publish no source tree, only an archive. Mutable Dreams' repository holds release
+# assets: the pinned checkout stays as it is and the source archive is extracted beside it into src/,
+# which is the build root (and what patches/ applies to). The archive is pinned by SHA-256; a pin that
+# moves needs the clones moved away, as any other (README section 6).
+sha256_of() {  # FILE
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+    else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+extract_source() {  # NAME ARCHIVE SHA256 TOPDIR
+    name=$1; archive=$2; sha=$3; top=$4; dir="$CLONES/$name/src"
+    if [ -d "$dir" ]; then
+        say "exists   $name/src"
+    else
+        [ -f "$CLONES/$name/$archive" ] || { say "ERROR: no clones/$name/$archive"; exit 1; }
+        got=$(sha256_of "$CLONES/$name/$archive")
+        if [ "$got" != "$sha" ]; then
+            say "ERROR: $name/$archive has SHA-256 $got; revisions.env pins $sha"
+            exit 1
+        fi
+        tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm1-src.XXXXXX")
+        unzip -q "$CLONES/$name/$archive" -d "$tmp" || {
+            rm -rf "$tmp"; say "ERROR: cannot unpack $name/$archive (unzip?)"; exit 1; }
+        [ -d "$tmp/$top" ] || { rm -rf "$tmp"; say "ERROR: $name/$archive has no $top/"; exit 1; }
+        mv "$tmp/$top" "$dir"
+        rm -rf "$tmp"
+        say "extract  $name/src <- $archive"
+    fi
+    # src/ is committed to the clone so the patch series has a base: `git am --3way` needs the
+    # pre-image blobs in the object database, and src/ is not part of upstream's tree.
+    if ! git -C "$CLONES/$name" cat-file -e "HEAD:src/README.md" 2>/dev/null; then
+        git -C "$CLONES/$name" add -A src
+        git -C "$CLONES/$name" commit --quiet -m "source: $archive (SHA-256 $sha)"
+        say "commit   $name/src"
+    fi
+}
+extract_source mutable-dreams "$MUTABLE_DREAMS_SOURCE" "$MUTABLE_DREAMS_SOURCE_SHA256" \
+    "$MUTABLE_DREAMS_SOURCE_DIR"
 
 # --------------------------------------------------------------- symlinks ---
 # The build needs <firmware>/base -> fm1-base and fm1-base/bsp -> felucca-bsp. Symlinks (rather
@@ -123,6 +162,7 @@ else
     apply_patches dinghy
     apply_patches cs1
     apply_patches melodee
+    apply_patches mutable-dreams
 fi
 
 # ------------------------------------------------------------------ venv ---
@@ -185,3 +225,4 @@ say "  scripts/build-sloop.sh      scripts/deploy-sloop.sh      scripts/verify-s
 say "  scripts/build-dinghy.sh     scripts/deploy-dinghy.sh     scripts/verify-dinghy.sh"
 say "  scripts/build-cs1.sh        scripts/deploy-cs1.sh        scripts/verify-cs1.sh"
 say "  scripts/build-melodee.sh    scripts/deploy-melodee.sh    scripts/verify-melodee.sh"
+say "  scripts/build-mutable-dreams.sh  scripts/deploy-mutable-dreams.sh  scripts/verify-mutable-dreams.sh"

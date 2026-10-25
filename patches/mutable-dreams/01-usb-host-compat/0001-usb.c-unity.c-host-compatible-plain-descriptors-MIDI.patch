@@ -1,0 +1,252 @@
+From be14e22065bd55ace660e32bdffc038ab603a657 Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Sun, 25 Oct 2026 07:35:46 +0100
+Subject: [PATCH] usb.c/unity.c: host-compatible plain descriptors: MIDI behind
+ the streams, the audio IAD, a serial
+
+Mutable Dreams vendors fm1-base bbfd461 and felucca-bsp 33cac69, and its stock plain build is the
+macOS 13-15 variant B: the AC header's collection names MIDI and the interface order is
+AC, MIDI, AS. The bsp host-compat set is ported into the vendored copy unchanged --
+FELUCCA_UAC_MIDI_LAST (MIDI behind the streaming interfaces, out of the AC collection: the fix),
+FELUCCA_UAC_IAD (the audio function's IAD, device class EF/02/01) and FELUCCA_USB_SERIAL (string
+descriptor 3, FELUCCA_ID: FM-1_71000 or the release identity) -- and unity.c turns the first two on
+for the plain build (FELUCCA_UAC, no CDC console). The CDC layouts keep their own descriptors (the
+flags are plain-build only), and the update loader keeps iSerialNumber 0.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ src/base/bsp/chip/usb.c | 132 +++++++++++++++++++++++++++++++++++++++-----
+ src/base/device/unity.c |   5 ++
+ 2 files changed, 124 insertions(+), 13 deletions(-)
+
+diff --git a/src/base/bsp/chip/usb.c b/src/base/bsp/chip/usb.c
+index bdf6769..8b2ecb8 100644
+--- a/src/base/bsp/chip/usb.c
++++ b/src/base/bsp/chip/usb.c
+@@ -26,7 +26,13 @@
+  * FELUCCA_UAC_OUT=1 (with FELUCCA_UAC) adds a USB audio output too: the computer plays through the FM-1 (16-bit
+  * stereo, 44.1 kHz, EP4 OUT isochronous adaptive). uac_service takes each packet into a ring (nested in the render
+  * too); uac_play, after each render, adds it to the output, resampled to the I2S clock (~44,117.6 Hz): the ring's
+- * fill steers the rate, so it neither runs dry nor overflows. */
++ * fill steers the rate, so it neither runs dry nor overflows.
++ * FELUCCA_UAC_AC_COLLECT=1 / FELUCCA_UAC_MIDI_LAST=1 (plain builds, FELUCCA_UAC only): the AC
++ * header's collection stops naming MIDI, and the MIDI function moves behind the streaming
++ * interfaces (AC, AS, [ASO], MIDI) instead of between them: for the macOS 13-15 audio bug
++ * (hugelton/Felucca#67, kmplngj/Felucca#532). Separate flags, to try each alone.
++ * FELUCCA_USB_SERIAL (default FELUCCA_ID): the device's own serial number string, so a host tells
++ * firmwares sharing a VID/PID apart; the update loader keeps iSerialNumber 0. */
+ #include "fm1_usb.h"   /* registers (chip/) */
+ #ifndef FELUCCA_CDC
+ #define FELUCCA_CDC 0
+@@ -40,6 +46,36 @@
+ #ifndef FELUCCA_UAC_OUT
+ #define FELUCCA_UAC_OUT 0
+ #endif
++/* FELUCCA_UAC_AC_COLLECT=1: the AC header's collection lists only the audio streaming
++ * interface(s), never MIDI. FELUCCA_UAC_MIDI_LAST=1: the streaming interfaces stay contiguous
++ * (AC, AS, [ASO]) with the MIDI function after them. Both are for the macOS 13-15 audio bug
++ * (hugelton/Felucca#67, kmplngj/Felucca#532); they are separate so a build can try each alone.
++ * Plain (no-CDC) builds only: a CDC composite would multiply the layout permutations. */
++#ifndef FELUCCA_UAC_AC_COLLECT
++#define FELUCCA_UAC_AC_COLLECT 0
++#endif
++#ifndef FELUCCA_UAC_MIDI_LAST
++#define FELUCCA_UAC_MIDI_LAST 0
++#endif
++/* FELUCCA_UAC_IAD=1: the plain build presents the audio function with an IAD and the misc/IAD
++ * device class (EF 02 01, bcdUSB 2.00), so the host sees AC + AS as one function. Descriptor
++ * hygiene rather than a host fix: the plain no-IAD build also enumerates on macOS, Windows 11,
++ * Linux, Android and iPadOS. It needs FELUCCA_UAC_MIDI_LAST to keep AC + AS contiguous. */
++#ifndef FELUCCA_UAC_IAD
++#define FELUCCA_UAC_IAD 0
++#endif
++#if FELUCCA_UAC_IAD && FELUCCA_CDC
++#error "FELUCCA_UAC_IAD: the plain build's IAD; the CDC layouts have their own"
++#endif
++#if FELUCCA_UAC_IAD && !FELUCCA_UAC
++#error "FELUCCA_UAC_IAD: no audio function to associate (needs FELUCCA_UAC)"
++#endif
++#if (FELUCCA_UAC_AC_COLLECT || FELUCCA_UAC_MIDI_LAST) && !FELUCCA_UAC
++#error "FELUCCA_UAC_AC_COLLECT / FELUCCA_UAC_MIDI_LAST: no audio streaming to reorder (needs FELUCCA_UAC)"
++#endif
++#if (FELUCCA_UAC_AC_COLLECT || FELUCCA_UAC_MIDI_LAST) && FELUCCA_CDC
++#error "FELUCCA_UAC_AC_COLLECT / FELUCCA_UAC_MIDI_LAST: plain builds only (no FELUCCA_CDC)"
++#endif
+ #if !FELUCCA_UAC
+ #undef FELUCCA_UAC_48K
+ #define FELUCCA_UAC_48K 0
+@@ -312,11 +348,32 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
+ #else
+ #define FMT_LEN 0
+ #endif
++/* Interface numbers. Without FELUCCA_UAC_MIDI_LAST: AC, MIDI, AS, [ASO] (MIDI between the two).
++ * With it: AC, AS, [ASO], MIDI, so the streaming interfaces stay contiguous and the MIDI function
++ * comes after them (#67 / #532). FELUCCA_UAC_AC_COLLECT keeps MIDI out of the AC header's
++ * collection list; FELUCCA_UAC_MIDI_LAST implies that too, since MIDI is then no longer part of the
++ * audio function at all. (Outside FELUCCA_UAC the macros stay defined but unused: D_AC/D_AS are empty.) */
++#define UAC_AS_N(a) ((a) + (FELUCCA_UAC_MIDI_LAST ? 1 : 2))
++#define UAC_ASO_N(a) ((a) + (FELUCCA_UAC_MIDI_LAST ? 2 : 3))
++#define UAC_MIDI_N(a) (FELUCCA_UAC_MIDI_LAST ? (a) + 2 + FELUCCA_UAC_OUT : (a) + 1)
+ #if FELUCCA_UAC
++#if FELUCCA_UAC_MIDI_LAST || FELUCCA_UAC_AC_COLLECT
++#if FELUCCA_UAC_OUT
++#define D_ACH(a) 10, 0x24, 1, 0x00, 0x01, 52, 0, 2, UAC_AS_N(a), UAC_ASO_N(a),   /* AC header: the streams */
++#else
++#define D_ACH(a) 9, 0x24, 1, 0x00, 0x01, 30, 0, 1, UAC_AS_N(a),                 /* AC header 1.00: the stream */
++#endif
++#else
++#if FELUCCA_UAC_OUT
++#define D_ACH(a) 11, 0x24, 1, 0x00, 0x01, 53, 0, 3, (a) + 1, (a) + 2, (a) + 3,   /* AC header: MIDI, both streams */
++#else
++#define D_ACH(a) 10, 0x24, 1, 0x00, 0x01, 31, 0, 2, (a) + 1, (a) + 2,           /* AC header 1.00: MIDI + stream */
++#endif
++#endif
+ #if FELUCCA_UAC_OUT
+ #define D_AC(a)                                                                                      \
+     9, 4, (a), 0, 0, 1, 1, 0, 0,                                                                     \
+-    11, 0x24, 1, 0x00, 0x01, 53, 0, 3, (a) + 1, (a) + 2, (a) + 3,   /* AC header: MIDI, both streams */  \
++    D_ACH(a)                                                                                         \
+     12, 0x24, 2, 1, 0x03, 0x06, 0, 2, 0x03, 0x00, 0, 0,    /* input terminal 1: line, 2 ch (L R) */      \
+     9, 0x24, 3, 2, 0x01, 0x01, 0, 1, 0,                    /* output terminal 2: USB streaming, from 1 */ \
+     12, 0x24, 2, 3, 0x01, 0x01, 0, 2, 0x03, 0x00, 0, 0,    /* input terminal 3: USB streaming, 2 ch */   \
+@@ -331,7 +388,7 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
+ #else
+ #define D_AC(a)                                                                                      \
+     9, 4, (a), 0, 0, 1, 1, 0, 0,                                                                     \
+-    10, 0x24, 1, 0x00, 0x01, 31, 0, 2, (a) + 1, (a) + 2,   /* AC header 1.00: MIDI + audio streaming */ \
++    D_ACH(a)                                                                                         \
+     12, 0x24, 2, 1, 0x03, 0x06, 0, 2, 0x03, 0x00, 0, 0,    /* input terminal 1: line, 2 ch (L R) */      \
+     9, 0x24, 3, 2, 0x01, 0x01, 0, 1, 0,                    /* output terminal 2: USB streaming, from 1 */
+ #define D_ASO(o)
+@@ -359,9 +416,17 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
+     5, 0x25, 1, 1, 1,                                                                                \
+     9, 5, 0x81, 2, 64, 0, 0, 0, 0,                                                                   \
+     5, 0x25, 1, 1, 3,
+-#define D_AUDIO(a) D_AC(a) D_MIDI((a) + 1) D_AS((a) + 2) D_ASO((a) + 3)   /* audio + MIDI from interface a */
++#if FELUCCA_UAC_MIDI_LAST
++/* AC, AS, [ASO], MIDI: the audio function first, contiguous */
++#define D_AUDIO(a) D_AC(a) D_AS(UAC_AS_N(a)) D_ASO(UAC_ASO_N(a)) D_MIDI(UAC_MIDI_N(a))
++#else
++#define D_AUDIO(a) D_AC(a) D_MIDI(UAC_MIDI_N(a)) D_AS(UAC_AS_N(a)) D_ASO(UAC_ASO_N(a))
++#endif
+ #define AUD_NIF (2 + FELUCCA_UAC + FELUCCA_UAC_OUT)
+-#define AUD_LEN (92 + (63 + FMT_LEN) * FELUCCA_UAC + 74 * FELUCCA_UAC_OUT)
++/* the AC header loses a byte when its collection stops naming MIDI (see D_ACH: AC_COLLECT, or
++ * MIDI_LAST, which implies it) */
++#define AC_SMALL (FELUCCA_UAC_AC_COLLECT || FELUCCA_UAC_MIDI_LAST)
++#define AUD_LEN (92 - AC_SMALL + (63 + FMT_LEN) * FELUCCA_UAC + 74 * FELUCCA_UAC_OUT)
+ #define D_CDC(c)                                                                                     \
+     D_IAD((c), 2, 2, 2, 1),                                /* IAD: CDC ACM */                           \
+     9, 4, (c), 0, 1, 2, 2, 1, 0,                           /* communication */                          \
+@@ -374,16 +439,50 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
+     7, 5, 0x03, 2, 64, 0, 0,                               /* EP3 OUT bulk */                           \
+     7, 5, 0x83, 2, 64, 0, 0,                               /* EP3 IN bulk */
+ #define CDC_LEN 66                                         /* with its IAD */
++/* the descriptor variants get a bcdDevice bit each, so a host never reuses what it cached of another */
+ #define BCD_LO(cdc) (0x10 * (FELUCCA_UAC + FELUCCA_UAC_48K) + 0x40 * FELUCCA_UAC_OUT + \
++                     0x02 * FELUCCA_UAC_AC_COLLECT + 0x04 * FELUCCA_UAC_MIDI_LAST + \
++                     0x08 * FELUCCA_UAC_IAD + \
+                      ((cdc) ? 0x01 + 2 * FELUCCA_USB_LAYOUT : 0))
++/* FELUCCA_USB_SERIAL: a build's own serial number string (string descriptor 3, iSerialNumber), so the
++ * host tells two firmwares on the same VID/PID apart instead of reusing a cached name. Unless a build
++ * names its own, it is the package identity (FELUCCA_ID: "FM-1_1000"), which every firmware already
++ * sets differently. The update loader keeps iSerialNumber 0: its device (1209:0002) is the one the
++ * installer knows. */
++#if !defined(FELUCCA_USB_SERIAL) && defined(FELUCCA_ID) && !defined(FELUCCA_LOADER)
++#define FELUCCA_USB_SERIAL FELUCCA_ID
++#endif
++#ifdef FELUCCA_USB_SERIAL
++#ifndef FELUCCA_LOADER
++#define FELUCCA_USB_SNUM 3
++#endif
++#endif
++#ifndef FELUCCA_USB_SNUM
++#define FELUCCA_USB_SNUM 0
++#endif
+ #define D_DEV(bcdusb, cls, sub, proto, cdc)                                                          \
+     18, 1, (bcdusb) & 0xFF, (bcdusb) >> 8, (cls), (sub), (proto), 64, 0x09, 0x12, FELUCCA_USB_PID & 0xFF, \
+-    FELUCCA_USB_PID >> 8, BCD_LO(cdc), 0x03, 1, 2, 0, 1
++    FELUCCA_USB_PID >> 8, BCD_LO(cdc), 0x03, 1, 2, FELUCCA_USB_SNUM, 1
+ 
+-/* without the console (FELUCCA_CDC=0, or usb_cdc_on = 0): class 0, no IAD, as a plain USB-MIDI / audio device */
++/* without the console (FELUCCA_CDC=0, or usb_cdc_on = 0): class 0, no IAD, as a plain USB-MIDI / audio
++ * device; with FELUCCA_UAC_IAD, misc/IAD (EF 02 01) and the audio function's IAD.
++ * The IAD covers the audio interfaces ONLY (AC + AS), which requires them contiguous: the MIDI
++ * function is left outside it (descriptor hygiene, not a host requirement). */
++#if FELUCCA_UAC_IAD
++#if !FELUCCA_UAC_MIDI_LAST
++#error "FELUCCA_UAC_IAD: the audio IAD needs the audio interfaces contiguous (FELUCCA_UAC_MIDI_LAST)"
++#endif
++#define AUD_IAD_NIF (1 + FELUCCA_UAC + FELUCCA_UAC_OUT)   /* AC + AS (+ ASO), never MIDI */
++#define CFG_LEN_PLAIN (9 + 8 + AUD_LEN)
++static const uint8_t DEV_DESC_PLAIN[18] = {D_DEV(0x0200, 0xEF, 0x02, 0x01, 0)};
++static const uint8_t CFG_DESC_PLAIN[] = {D_CFG(CFG_LEN_PLAIN, AUD_NIF),
++                                         D_IAD(0, AUD_IAD_NIF, 1, 1, 0),   /* IAD: the audio function */
++                                         D_AUDIO(0)};
++#else
+ #define CFG_LEN_PLAIN (9 + AUD_LEN)
+ static const uint8_t DEV_DESC_PLAIN[18] = {D_DEV(0x0110, 0, 0, 0, 0)};
+ static const uint8_t CFG_DESC_PLAIN[] = {D_CFG(CFG_LEN_PLAIN, AUD_NIF), D_AUDIO(0)};
++#endif
+ typedef char cfg_plain_len_ok[sizeof CFG_DESC_PLAIN == CFG_LEN_PLAIN ? 1 : -1];
+ #if FELUCCA_CDC
+ #define CFG_LEN (9 + 8 + AUD_LEN + CDC_LEN)
+@@ -423,8 +522,8 @@ static uint8_t usb_cdc_on = FELUCCA_CDC_DEFAULT != 0;      /* the console is pre
+ #define USB_CDC_ON 0
+ #define AUD_IF 0u
+ #endif
+-#define UAC_AS_IF (AUD_IF + 2u)
+-#define UAC_ASO_IF (AUD_IF + 3u)            /* the output stream (FELUCCA_UAC_OUT) */
++#define UAC_AS_IF (AUD_IF + (FELUCCA_UAC_MIDI_LAST ? 1u : 2u))
++#define UAC_ASO_IF (AUD_IF + (FELUCCA_UAC_MIDI_LAST ? 2u : 3u))   /* the output stream (FELUCCA_UAC_OUT) */
+ static const uint8_t STR0[4] = {4, 3, 0x09, 0x04};
+ static const uint8_t STR1[] = {42, 3, 'H', 0, 0xFC, 0, 'g', 0, 'e', 0, 'l', 0, 't', 0, 'o', 0, 'n', 0, ' ', 0, 'I', 0,
+                                'n', 0, 's', 0, 't', 0, 'r', 0, 'u', 0, 'm', 0, 'e', 0, 'n', 0, 't', 0, 's', 0};
+@@ -435,10 +534,11 @@ static const uint8_t STR2[] = {30, 3, 'F', 0, 'e', 0, 'l', 0, 'u', 0, 'c', 0, 'c
+ static const uint8_t STR2[] = {16, 3, 'F', 0, 'e', 0, 'l', 0, 'u', 0, 'c', 0, 'c', 0, 'a', 0};
+ #endif
+ 
+-#if defined(FELUCCA_USB_MANUFACTURER) || defined(FELUCCA_USB_PRODUCT)
+-/* A string descriptor built from a plain ASCII string (the build settings FELUCCA_USB_MANUFACTURER and
+- * FELUCCA_USB_PRODUCT, e.g. -DFELUCCA_USB_PRODUCT='"CTL-1 FM-1"'), at most 31 characters. EP0 sends one
+- * descriptor at a time, so one buffer serves both. */
++#if defined(FELUCCA_USB_MANUFACTURER) || defined(FELUCCA_USB_PRODUCT) || \
++    (FELUCCA_USB_SNUM && defined(FELUCCA_USB_SERIAL))
++/* A string descriptor built from a plain ASCII string (the build settings FELUCCA_USB_MANUFACTURER,
++ * FELUCCA_USB_PRODUCT and FELUCCA_USB_SERIAL, e.g. -DFELUCCA_USB_PRODUCT='"CTL-1 FM-1"'), at most 31
++ * characters. EP0 sends one descriptor at a time, so one buffer serves all. */
+ static uint8_t usb_str_buf[2 + 2 * 31];
+ 
+ static int usb_str_desc(const char *s, const uint8_t **d, uint16_t *l)
+@@ -489,6 +589,12 @@ static int get_desc(uint32_t wvalue, const uint8_t **d, uint16_t *l)
+             *d = STR2;
+             *l = sizeof STR2;
+             return 1;
++#endif
++        case 3:
++#if FELUCCA_USB_SNUM
++            return usb_str_desc(FELUCCA_USB_SERIAL, d, l);
++#else
++            return 0;                                  /* no serial number (iSerialNumber 0) */
+ #endif
+         default:
+             return 0;
+diff --git a/src/base/device/unity.c b/src/base/device/unity.c
+index 68f0fde..60d09d0 100644
+--- a/src/base/device/unity.c
++++ b/src/base/device/unity.c
+@@ -80,6 +80,11 @@ static volatile uint32_t fm1_ms;  /* milliseconds since boot (TIMER4-based, TIME
+ #ifndef FELUCCA_ID
+ #define FELUCCA_ID "FM-1_000"     /* package identity (tools/build.py passes the firmware's) */
+ #endif
++/* USB host compatibility (README section 7): MIDI behind the streaming interfaces and out of the
++ * AC header's collection, plus the audio function's IAD. The CDC console build keeps its own layout
++ * (usb.c allows the flags on plain builds only). */
++#define FELUCCA_UAC_MIDI_LAST (FM1B_UAC && !FM1B_CDC)
++#define FELUCCA_UAC_IAD FELUCCA_UAC_MIDI_LAST
+ #ifndef FM1B_MIRROR
+ #define FM1B_MIRROR 0
+ #endif
+-- 
+2.55.0
+

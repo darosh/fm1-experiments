@@ -1,7 +1,7 @@
 # fm1-experiments
 
 Scratch repo for M-VAVE FM-1 firmware experiments, maintained mostly by an LLM following this
-file. It pins twelve upstream repositories at known commits, keeps our changes as patch series, and
+file. It pins thirteen upstream repositories at known revisions, keeps our changes as patch series, and
 gives each firmware its own build, verify and deploy script.
 
 ## Contents
@@ -18,6 +18,7 @@ gives each firmware its own build, verify and deploy script.
   - [Dinghy](#dinghy-dinghy)
   - [CS-1](#cs-1-cs-1)
   - [Melodee](#melodee-melodee)
+  - [Mutable Dreams](#mutable-dreams-mutable-dreams)
 - [3. Pinned revisions](#3-pinned-revisions)
 - [4. Layout](#4-layout)
 - [5. Patches](#5-patches)
@@ -26,7 +27,7 @@ gives each firmware its own build, verify and deploy script.
 - [8. Troubleshooting](#8-troubleshooting)
 - [9. Recovery](#9-recovery)
 
-Ten firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
+Eleven firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
 **AMB-1** ([fm1-amb](https://github.com/charlesvestal/fm1-amb)) sit on the shared fm1-base; fm1-base's
 own **template** firmware is built too, as the platform's reference app. **Felucca**
 ([Felucca](https://github.com/hugelton/Felucca)) is standalone: it carries its own platform under
@@ -43,7 +44,12 @@ Dinghy and CS-1 carry SLOOP's platform *before* its AS-first collection change: 
 build is variant B below, the buggy layout. **Melodee**
 ([melodee](https://github.com/keremimo/melodee)) is a GPL-3.0 fork of Felucca with its own USB stack,
 vendored (no submodules). It is included as a reference: its stock build is host-compatible with no
-patch, and its descriptors solve the macOS bug a different way than we do (§7).
+patch, and its descriptors solve the macOS bug a different way than we do (§7). **Mutable Dreams**
+([mutable-dreams](https://github.com/kidbee85-beep/mutable-dreams)) is a standalone six-track
+Mutable Instruments-inspired instrument: it vendors an fm1-base snapshot (fm1-base `bbfd461` plus
+the app's own delta, with felucca-bsp `33cac69` under `base/bsp`), so it is not on our shared base
+clone, and its stock plain build is variant B below. That snapshot is published only as a source
+archive, which `setup.sh` extracts into `clones/mutable-dreams/src`.
 
 The current experiment is **USB host compatibility**: the firmwares built from these patches have a
 working USB audio input and a correctly named USB-MIDI port on macOS, Windows, Linux, Android and
@@ -59,7 +65,7 @@ iPadOS. Nothing here is pushed upstream.
 | Rosetta (Apple silicon) | the build container is `linux/amd64` | `softwareupdate --install-rosetta --agree-to-license` |
 | JieLi toolchain | `clang` for `pi32v2` | after the first `setup.sh`: `clones/fm1-base/tools/get_toolchain.sh` (installs `~/.jieli/toolchain`; the pinned package is `jieli-linux-toolchains-20260730.1`) |
 | AC79 SDK | SPL, `cfg_tool.bin`, EQ table for packaging | see below |
-| Python with Pillow+raqm, fontTools, numpy, scipy | fonts, screen-reader words; Felucca, TONITOR, SLOOP and Melodee rasterise their UI font at build time; ZEN-1's reference-analysis selftest uses numpy/scipy | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools, numpy and scipy |
+| Python with Pillow+raqm, fontTools, numpy, scipy | fonts, screen-reader words; Felucca, TONITOR, SLOOP, Melodee and Mutable Dreams rasterise their UI font at build time; ZEN-1's reference-analysis selftest uses numpy/scipy | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools, numpy and scipy |
 
 The SDK is ~1.4 GB and is **not** cloned into this repo:
 
@@ -393,6 +399,48 @@ it prefers `$AC79_SDK` when set. `verify-melodee.sh` therefore runs the suite ag
 view: the pinned SDK's `uboot.boot`, `cfg_tool.bin` and `cfg/eq_cfg_hw.bin`, with Melodee's shipped
 recovery helper in place of V1.2.14's. The build is unaffected and uses the pinned SDK as is.
 
+### Mutable Dreams (mutable-dreams)
+
+Build; writes `clones/mutable-dreams/src/app/build/mutable-dreams.fwsc` (or
+`mutable-dreams-X.Y.fwsc` for a release):
+
+```sh
+./scripts/build-mutable-dreams.sh
+```
+
+Host tests and the descriptor check (run a build first; the descriptor check reads
+`src/app/build/mutable-dreams.bin`, the WASM suite runs only when `WASI_SDK` names a clang):
+
+```sh
+./scripts/verify-mutable-dreams.sh
+```
+
+Flash (`--info` prints the connected FM-1's identity and writes nothing):
+
+```sh
+./scripts/deploy-mutable-dreams.sh
+```
+
+Mutable Dreams is standalone on a **vendored fm1-base snapshot**: `src/base/` is fm1-base `bbfd461`
+(the revision the app was written against) with the app's own delta — `plat.h`'s bench hooks
+(`plat_audio_peak_us`/`_reset`), `device/sysex_dispatch.h`, its backup tooling and the `dreams`
+font set — and `src/base/bsp/` is felucca-bsp `33cac69` (no symlink, no submodules). That is why
+it does not use our shared base clone: our pin is newer and does not carry those app hooks. Its
+stock plain build is variant B below (`AC, MIDI, AS`, the AC collection naming both), so
+`patches/mutable-dreams/01-usb-host-compat` ports the host-compat set into the vendored `usb.c`
+unchanged, and `base/device/unity.c` turns `FELUCCA_UAC_MIDI_LAST` and `FELUCCA_UAC_IAD` on for
+the plain build. The serial number follows `FELUCCA_ID` (`FM-1_71000`, or the release identity).
+The CDC console is not part of this snapshot (its `console.c` is not vendored, so `FM1B_CDC=1`
+does not link); the flags are plain-build only anyway and leave the CDC layouts' descriptors
+untouched.
+
+The upstream repository publishes **no source tree**, only release archives: `setup.sh` pins the
+v1.1 commit and the `Mutable-Dreams-1.1-Source.zip` SHA-256, extracts the archive into
+`clones/mutable-dreams/src` and commits it there so the patch series has a base. The build is
+`src/base/tools/build.py src/app`, and `build-mutable-dreams.sh` passes `--release X.Y[.Z]` and
+`--sdk DIR` through. Its build.py checks the SDK against **AC79NN_SDK_V1.2.1** and only warns on
+the pinned V1.2.14, so the package carries V1.2.14's `cfg_tool.bin` and EQ table.
+
 ---
 
 ## 3. Pinned revisions
@@ -413,16 +461,20 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 | `zvenson/dinghy` | `22acb91` (0.4) | Dinghy |
 | `twochannels/CS-1` | `5dce8fa` (0.3.4) | CS-1 |
 | `keremimo/melodee` | `398ada1` (v1.4.5) | Melodee (reference: no patch) |
+| `kidbee85-beep/mutable-dreams` | `04cf468` (v1.1) + archive `90fef68…` | Mutable Dreams (source is the pinned Source zip) |
 | `charlesvestal/fm1-fomni` | `b81eb6b` / `6c32623` | ZEN-1's platform guard upstreams (fetched by SHA into the zen-1 clone) |
 | AC79 SDK | tag `AC79NN_SDK_V1.2.14_2026-10-13` | external, outside this repo |
 | JieLi toolchain | package `jieli-linux-toolchains-20260730.1` | external, outside this repo |
 | docker base | `debian:bookworm-slim@sha256:7ff6ba3…` | the build container's image, `JIELI_DOCKER_IMAGE` |
 | python | `mido 1.3.3`, `python-rtmidi 1.5.8`, `fonttools 4.66.1`, `numpy 2.5.4`, `scipy 1.18.1` | `.venv`, installed by `setup.sh` |
 
-The repos are pinned to their latest `main` (LOOM-8, AMB-1, ZEN-1 and Melodee are at their latest
-release tag; TONITOR, SLOOP, Dinghy and CS-1 have none, so their pins are their latest main commits). ZEN-1's two `fm1-fomni` rows are not
+The repos are pinned to their latest `main` (LOOM-8, AMB-1, ZEN-1, Melodee and Mutable Dreams are
+at their latest release tag; TONITOR, SLOOP, Dinghy and CS-1 have none, so their pins are their
+latest main commits). ZEN-1's two `fm1-fomni` rows are not
 clones: `setup.sh` fetches them by SHA into `clones/zen-1` for its platform guard, because they are
-not on any branch of that repository.
+not on any branch of that repository. Mutable Dreams' pin is two things: the v1.1 commit that
+publishes the release (and its checksums), and the SHA-256 of the source archive that commit
+carries (the repository has no source tree of its own).
 One fm1-base and one felucca-bsp are shared by both fm1-base firmwares, so the base is pinned to its
 own `main` rather than to either firmware's submodule pointer (`42dc630` for LOOM-8, `15dff6d` for
 AMB-1 — both are ancestors of the pin). Felucca-Engines is pinned to the commit Felucca's own tree
@@ -452,10 +504,13 @@ clones/                      ignored; scripts/setup.sh creates it
   dinghy/                    pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
   cs1/                       pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
   melodee/                   pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
+  mutable-dreams/            pinned checkout (release assets only), branch "experiments"
+    src/                     the pinned Source zip extracted and committed: the build root
 patches/<repo>/<NN-problem>/NNNN-*.patch
 scripts/
-  setup.sh                   clones, links, patches, venv, prerequisite report
+  setup.sh                   clones, archives, links, patches, venv, prerequisite report
   lib/common.sh              ROOT, the pins, environment, shared helpers
+  lib/usb_desc.py            read a built image's USB descriptors; checks the host-compat set
   build-loom.sh   deploy-loom.sh   verify-loom.sh
   build-amb.sh    deploy-amb.sh    verify-amb.sh
   build-template.sh  deploy-template.sh  verify-base.sh
@@ -466,8 +521,14 @@ scripts/
   build-dinghy.sh    deploy-dinghy.sh    verify-dinghy.sh
   build-cs1.sh       deploy-cs1.sh       verify-cs1.sh
   build-melodee.sh   deploy-melodee.sh   verify-melodee.sh
+  build-mutable-dreams.sh  deploy-mutable-dreams.sh  verify-mutable-dreams.sh
 revisions.env                the pins
 ```
+
+`mutable-dreams/` is the one clone whose source is not its checkout: the repository carries only
+release assets, so `setup.sh` extracts `Mutable-Dreams-1.1-Source.zip` into `src/` (after checking
+its pinned SHA-256) and commits it on `experiments`, giving the patch series a base whose pre-image
+blobs exist. `src/` is the build root; there is no `base` symlink (its platform is vendored).
 
 The submodule paths are **symlinks**, not real checkouts: one copy of each repo, and patches are
 applied once. Git records those paths as submodules, so `setup.sh` sets
@@ -510,6 +571,8 @@ patches/
   cs1/01-usb-host-compat/           usb.c: the same descriptor set, a descriptor test, build.py
                                     forwarding the flags, and the suite's end marker
   melodee/                          none: its own USB stack is already host-compatible (§7)
+  mutable-dreams/01-usb-host-compat/  usb.c (under src/base/bsp): the same descriptor set; unity.c
+                                    turns MIDI_LAST and the IAD on for the plain build
 ```
 
 - Generated with `git format-patch`, applied with `git am --3way`, so the commit messages and
@@ -521,6 +584,8 @@ patches/
   descriptor set.
 - `setup.sh` skips a patch whose reverse applies cleanly (already applied), applies it if it
   applies cleanly, and stops with the patch name if neither is true.
+- `patches/mutable-dreams` applies to the extracted `src/` tree, so its paths carry that prefix;
+  the archive commit is what its `index` lines resolve against.
 
 Adding an experiment: make the change in `clones/<repo>`, commit it, then
 
@@ -535,7 +600,9 @@ Regenerating an existing one: delete the old `.patch` files in that problem dire
 
 ## 6. Bumping a pin
 
-1. Edit `revisions.env` with the new commit(s).
+1. Edit `revisions.env` with the new commit(s). For an archive-only upstream such as Mutable
+   Dreams, update the archive name and its SHA-256 too (and the archive's top directory, which
+   `setup.sh` moves into `src/`).
 2. Move `clones/` away (or delete it) so `setup.sh` clones fresh at the new pins. The pin check
    refuses to move an existing `experiments` branch forward, so this step is not optional.
 3. Run `./scripts/setup.sh --no-patches` to get the new trees linked without our changes.
@@ -612,6 +679,15 @@ stack (`firmware/src/usb.c` plus `usb_audio.c`, `usb_audio_stream.c` and `usb_au
 vendors the rest of its platform (no submodules). Nothing here patches it: its stock build is
 host-compatible, and its descriptors are built on a different principle from the bsp's (below).
 
+Mutable Dreams is a ninth chain: it vendors fm1-base `bbfd461` (plus the app's own delta) and
+felucca-bsp `33cac69`, so its `base/bsp/chip/usb.c` is the same descriptor code the bsp had at
+that pin — variant B in the plain build. The host-compat set is ported into that copy
+(`patches/mutable-dreams/01-usb-host-compat`), and `base/device/unity.c` turns `MIDI_LAST` and
+the audio IAD on for the plain build. Its source is distributed only as a release archive, so the
+tree `setup.sh` builds is the extracted archive, not the checkout. Its platform predates 48 kHz
+USB audio (`FM1B_UAC_48K` off), and `usb_audio_out` is off in its `fm1.toml`: the build has the
+stereo input only.
+
 ### Bug 1 — no USB audio input on macOS 13–15
 
 Upstream: [hugelton/Felucca#67](https://github.com/hugelton/Felucca/issues/67),
@@ -632,8 +708,9 @@ never bisected them. We did, on macOS 15.8.1:
 change alone is necessary-but-not-sufficient, and it moves with the ordering anyway (once MIDI
 leaves the audio function it must leave the collection). Implemented as `FELUCCA_UAC_MIDI_LAST`,
 enabled through `usb_midi_last` in `fm1.toml`; both fm1-base firmwares turn it on, and Felucca,
-ZEN-1, TONITOR, SLOOP, Dinghy and CS-1 export it from their build scripts (Melodee does not need it:
-its MIDI is a function of its own — see below). TONITOR 0.55, SLOOP 2.7.2 and Felucca
+ZEN-1, TONITOR, SLOOP, Dinghy and CS-1 export it from their build scripts, and Mutable Dreams sets
+it in its vendored `base/device/unity.c` (Melodee does not need it: its MIDI is a function of its
+own — see below). TONITOR 0.55, SLOOP 2.7.2 and Felucca
 1.6 all ship variant C (the streaming interface first in the collection, the old interface order); it
 does not fix the audio input on macOS 15.
 
@@ -780,9 +857,10 @@ firmware installed over USB-MIDI keeps whatever SPL is already on the device. V1
 | `firmware/engines is empty` | run `setup.sh` (it links `clones/felucca/firmware/engines` to `clones/felucca-engines`) |
 | `deploy-*.sh: no package in ...` | run the matching build first; a release build is named `NAME-X.Y.fwsc` and is picked automatically |
 | template build: `undefined reference to usr_timeout_del` | the pinned SDK cannot link the BLE template; use the script's default `--no-ble` (or SDK V1.2.1) |
-| `warning: SDK ... differs from AC79NN_SDK_V1.2.1` (Melodee build) | expected: Melodee checks its tested SDK (V1.2.1), the pinned one is V1.2.14 and only warns; see §2 |
+| `warning: SDK ... differs from AC79NN_SDK_V1.2.1` (Melodee or Mutable Dreams build) | expected: both check their tested SDK (V1.2.1), the pinned one is V1.2.14 and only warns; see §2 |
+| Mutable Dreams: `no clones/mutable-dreams/src` | `setup.sh` could not unpack the source archive; install `unzip`, or the archive's SHA-256 no longer matches the pin (see `revisions.env`) |
 | Melodee: `Unsupported wl82loader.bin` from `tools/fm1_recover.py` | the tool accepts only the V1.2.1 helper Melodee ships, and prefers the (V1.2.14) `$AC79_SDK` one when set; pass `--loader clones/melodee/assets/recovery/wl82loader.bin` or unset `AC79_SDK`; `verify-melodee.sh` already does this |
-| macOS shows the old MIDI name | CoreMIDI caches per VID/PID/serial: unplug, delete the stale entry in Audio MIDI Setup → MIDI Studio, replug. Each build here reports its identity as the serial, so switching between LOOM-8, AMB-1, Felucca, ZEN-1, TONITOR and SLOOP gives distinct entries |
+| macOS shows the old MIDI name | CoreMIDI caches per VID/PID/serial: unplug, delete the stale entry in Audio MIDI Setup → MIDI Studio, replug. Each build here reports its identity as the serial, so switching between LOOM-8, AMB-1, Felucca, ZEN-1, TONITOR, SLOOP and Mutable Dreams gives distinct entries |
 | Linux card named "pid.codes Test PID" | host-side naming; see the pid.codes note above |
 
 ## 9. Recovery
