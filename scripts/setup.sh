@@ -45,6 +45,7 @@ clone_repo tonitor        "$TONITOR_URL"         "$TONITOR_COMMIT"
 clone_repo sloop          "$SLOOP_URL"           "$SLOOP_COMMIT"
 clone_repo dinghy         "$DINGHY_URL"          "$DINGHY_COMMIT"
 clone_repo cs1            "$CS1_URL"             "$CS1_COMMIT"
+clone_repo melodee        "$MELODEE_URL"         "$MELODEE_COMMIT"
 
 # --------------------------------------------------------------- symlinks ---
 # The build needs <firmware>/base -> fm1-base and fm1-base/bsp -> felucca-bsp. Symlinks (rather
@@ -121,6 +122,7 @@ else
     apply_patches sloop
     apply_patches dinghy
     apply_patches cs1
+    apply_patches melodee
 fi
 
 # ------------------------------------------------------------------ venv ---
@@ -182,3 +184,4 @@ say "  scripts/build-tonitor.sh    scripts/deploy-tonitor.sh    scripts/verify-t
 say "  scripts/build-sloop.sh      scripts/deploy-sloop.sh      scripts/verify-sloop.sh"
 say "  scripts/build-dinghy.sh     scripts/deploy-dinghy.sh     scripts/verify-dinghy.sh"
 say "  scripts/build-cs1.sh        scripts/deploy-cs1.sh        scripts/verify-cs1.sh"
+say "  scripts/build-melodee.sh    scripts/deploy-melodee.sh    scripts/verify-melodee.sh"

@@ -1,10 +1,10 @@
 # fm-1-experiments
 
 Scratch repo for M-VAVE FM-1 firmware experiments, maintained mostly by an LLM following this
-file. It pins eleven upstream repositories at known commits, keeps our changes as patch series, and
+file. It pins twelve upstream repositories at known commits, keeps our changes as patch series, and
 gives each firmware its own build, verify and deploy script.
 
-Nine firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
+Ten firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
 **AMB-1** ([fm1-amb](https://github.com/charlesvestal/fm1-amb)) sit on the shared fm1-base; fm1-base's
 own **template** firmware is built too, as the platform's reference app. **Felucca**
 ([Felucca](https://github.com/hugelton/Felucca)) is standalone: it carries its own platform under
@@ -18,7 +18,10 @@ descendant of the same platform (48 kHz USB audio, a runtime USB RATE menu, no s
 that platform, also vendored (and its own SMK-37 board layer). **CS-1**
 ([CS-1](https://github.com/twochannels/CS-1)) is a CS-80-style synthesizer built on Dinghy's platform.
 Dinghy and CS-1 carry SLOOP's platform *before* its AS-first collection change: their stock plain
-build is variant B below, the buggy layout.
+build is variant B below, the buggy layout. **Melodee**
+([melodee](https://github.com/keremimo/melodee)) is a GPL-3.0 fork of Felucca with its own USB stack,
+vendored (no submodules). It is included as a reference: its stock build is host-compatible with no
+patch, and its descriptors solve the macOS bug a different way than we do (§7).
 
 The current experiment is **USB host compatibility**: the firmwares built from these patches have a
 working USB audio input and a correctly named USB-MIDI port on macOS, Windows, Linux, Android and
@@ -34,7 +37,7 @@ iPadOS. Nothing here is pushed upstream.
 | Rosetta (Apple silicon) | the build container is `linux/amd64` | `softwareupdate --install-rosetta --agree-to-license` |
 | JieLi toolchain | `clang` for `pi32v2` | after the first `setup.sh`: `clones/fm1-base/tools/get_toolchain.sh` (installs `~/.jieli/toolchain`; the pinned package is `jieli-linux-toolchains-20260730.1`) |
 | AC79 SDK | SPL, `cfg_tool.bin`, EQ table for packaging | see below |
-| Python with Pillow+raqm, fontTools, numpy, scipy | fonts, screen-reader words; Felucca, TONITOR and SLOOP rasterise their UI font at build time; ZEN-1's reference-analysis selftest uses numpy/scipy | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools, numpy and scipy |
+| Python with Pillow+raqm, fontTools, numpy, scipy | fonts, screen-reader words; Felucca, TONITOR, SLOOP and Melodee rasterise their UI font at build time; ZEN-1's reference-analysis selftest uses numpy/scipy | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools, numpy and scipy |
 
 The SDK is ~1.4 GB and is **not** cloned into this repo:
 
@@ -330,6 +333,44 @@ same ported host-compat set: `build-cs1.sh` exports `FELUCCA_UAC_MIDI_LAST=1` an
 variants (its upstream suite has no end marker, so the patch also adds the `ALL HOST TESTS PASSED`
 line the verify script reads). `DINGHY_DUAL_CORE=0` builds single-core.
 
+### Melodee (melodee)
+
+Build; writes `clones/melodee/build/melodee.fwsc` (or `melodee-X.Y.fwsc` for a release):
+
+```sh
+./scripts/build-melodee.sh
+```
+
+Host tests (run a build first; the web tests need Node and are skipped without it):
+
+```sh
+./scripts/verify-melodee.sh
+```
+
+Flash (`--info` prints the connected FM-1's identity and writes nothing):
+
+```sh
+./scripts/deploy-melodee.sh
+```
+
+Melodee is a GPL-3.0 fork of Felucca with its own USB stack (`firmware/src/usb.c`, `usb_audio.c`,
+`usb_audio_stream.c`, `usb_audio_desc.h`); it vendors its platform (no submodules) and **needs no
+patch here**. Its build has duplex USB audio on by default (`MELODEE_USB_AUDIO=1` in
+`firmware/src/melodee.c`): stereo playback and stereo or four-track capture, 16/24-bit PCM at
+44.1 kHz, with the direction and capture layout chosen on the device (MENU > USB AUDIO and USB
+INPUT). `build-melodee.sh` runs Melodee's own `build.sh`, which needs the venv's Pillow with Raqm;
+it passes `--release X.Y[.Z]`, `--nightly` and `--sdk DIR` through. Melodee's `tools/build.py`
+checks the SDK files against **AC79NN_SDK_V1.2.1** and *warns* (does not fail) on the pinned
+V1.2.14, so the package carries V1.2.14's `cfg_tool.bin` and EQ table rather than the ones Melodee
+was tested with. The MIDI serial console is not built in; Melodee's CDC composite and the USB audio
+share EP2/EP3 and are mutually exclusive.
+
+The SDK version also reaches the test suite: `tools/fm1_recover.py` accepts only the unmodified
+**V1.2.1** `wl82loader.bin` (30,720 B, `d9de9f1c…`) that Melodee ships under `assets/recovery/`, and
+it prefers `$AC79_SDK` when set. `verify-melodee.sh` therefore runs the suite against a temporary SDK
+view: the pinned SDK's `uboot.boot`, `cfg_tool.bin` and `cfg/eq_cfg_hw.bin`, with Melodee's shipped
+recovery helper in place of V1.2.14's. The build is unaffected and uses the pinned SDK as is.
+
 ---
 
 ## 3. Pinned revisions
@@ -349,14 +390,15 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 | `isod89/sloop-fm1` | `d893642` (2.8.1) | SLOOP |
 | `zvenson/dinghy` | `22acb91` (0.4) | Dinghy |
 | `twochannels/CS-1` | `5dce8fa` (0.3.4) | CS-1 |
+| `keremimo/melodee` | `398ada1` (v1.4.5) | Melodee (reference: no patch) |
 | `charlesvestal/fm1-fomni` | `b81eb6b` / `6c32623` | ZEN-1's platform guard upstreams (fetched by SHA into the zen-1 clone) |
 | AC79 SDK | tag `AC79NN_SDK_V1.2.14_2026-10-13` | external, outside this repo |
 | JieLi toolchain | package `jieli-linux-toolchains-20260730.1` | external, outside this repo |
 | docker base | `debian:bookworm-slim@sha256:7ff6ba3…` | the build container's image, `JIELI_DOCKER_IMAGE` |
 | python | `mido 1.3.3`, `python-rtmidi 1.5.8`, `fonttools 4.66.1`, `numpy 2.5.4`, `scipy 1.18.1` | `.venv`, installed by `setup.sh` |
 
-The repos are pinned to their latest `main` (LOOM-8, AMB-1 and ZEN-1 are at their latest release
-tag; TONITOR, SLOOP, Dinghy and CS-1 have none, so their pins are their latest main commits). ZEN-1's two `fm1-fomni` rows are not
+The repos are pinned to their latest `main` (LOOM-8, AMB-1, ZEN-1 and Melodee are at their latest
+release tag; TONITOR, SLOOP, Dinghy and CS-1 have none, so their pins are their latest main commits). ZEN-1's two `fm1-fomni` rows are not
 clones: `setup.sh` fetches them by SHA into `clones/zen-1` for its platform guard, because they are
 not on any branch of that repository.
 One fm1-base and one felucca-bsp are shared by both fm1-base firmwares, so the base is pinned to its
@@ -387,6 +429,7 @@ clones/                      ignored; scripts/setup.sh creates it
   sloop/                     pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
   dinghy/                    pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
   cs1/                       pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
+  melodee/                   pinned checkout, branch "experiments" (standalone: no base/bsp/engines)
 patches/<repo>/<NN-problem>/NNNN-*.patch
 scripts/
   setup.sh                   clones, links, patches, venv, prerequisite report
@@ -400,6 +443,7 @@ scripts/
   build-sloop.sh     deploy-sloop.sh     verify-sloop.sh
   build-dinghy.sh    deploy-dinghy.sh    verify-dinghy.sh
   build-cs1.sh       deploy-cs1.sh       verify-cs1.sh
+  build-melodee.sh   deploy-melodee.sh   verify-melodee.sh
 revisions.env                the pins
 ```
 
@@ -443,6 +487,7 @@ patches/
   dinghy/02-host-build/             gfx.c: the canvas strip is an ordinary static on a macOS host build
   cs1/01-usb-host-compat/           usb.c: the same descriptor set, a descriptor test, build.py
                                     forwarding the flags, and the suite's end marker
+  melodee/                          none: its own USB stack is already host-compatible (§7)
 ```
 
 - Generated with `git format-patch`, applied with `git am --3way`, so the commit messages and
@@ -540,6 +585,11 @@ size differ from Dinghy's), so `patches/cs1/01-usb-host-compat` is the same set.
 also need `patches/dinghy/02-host-build`: `gfx.c` puts the canvas strip in `.pool`, which Mach-O has
 no bare section for, so the static is plain on `__APPLE__`.
 
+Melodee is an eighth chain and the odd one out: a GPL-3.0 fork of Felucca that keeps its own USB
+stack (`firmware/src/usb.c` plus `usb_audio.c`, `usb_audio_stream.c` and `usb_audio_desc.h`) and
+vendors the rest of its platform (no submodules). Nothing here patches it: its stock build is
+host-compatible, and its descriptors are built on a different principle from the bsp's (below).
+
 ### Bug 1 — no USB audio input on macOS 13–15
 
 Upstream: [hugelton/Felucca#67](https://github.com/hugelton/Felucca/issues/67),
@@ -560,7 +610,8 @@ never bisected them. We did, on macOS 15.8.1:
 change alone is necessary-but-not-sufficient, and it moves with the ordering anyway (once MIDI
 leaves the audio function it must leave the collection). Implemented as `FELUCCA_UAC_MIDI_LAST`,
 enabled through `usb_midi_last` in `fm1.toml`; both fm1-base firmwares turn it on, and Felucca,
-ZEN-1, TONITOR, SLOOP, Dinghy and CS-1 export it from their build scripts. TONITOR 0.55, SLOOP 2.7.2 and Felucca
+ZEN-1, TONITOR, SLOOP, Dinghy and CS-1 export it from their build scripts (Melodee does not need it:
+its MIDI is a function of its own — see below). TONITOR 0.55, SLOOP 2.7.2 and Felucca
 1.6 all ship variant C (the streaming interface first in the collection, the old interface order); it
 does not fix the audio input on macOS 15.
 
@@ -584,6 +635,56 @@ for the same reason: it keeps the old order.
 `build-felucca.sh` exports them, with `FELUCCA_CDC=0` — the serial console is a developer tool and
 its CDC composite is the layout macOS 13–15 mis-attaches, so it is compiled out. Build the console
 variant with `FELUCCA_CDC=1` (and no MIDI_LAST/IAD) if you want it.
+
+### Melodee — one audio function per job, every function contiguous
+
+Melodee has the same symptom class (a UAC1 input that macOS 13–15 mis-attaches) and never had the
+bug, because it does not put MIDI and the audio streams in the same function. Its configuration
+carries **two audio functions**, each behind an IAD:
+
+| function | IAD | interfaces | AC header's collection names |
+|---|---|---|---|
+| MIDI | 0–1 | 0 = AC, 1 = MIDI streaming | IF1 |
+| playback + capture | 2–4 | 2 = AC, 3 = playback AS, 4 = capture AS | IF3, IF4 |
+
+The raw interface order is `AC, MS, AC, AS, AS`. The bsp's layout is one audio function whose
+streaming interfaces MIDI can sit between (variants B and D in the table above); Melodee's audio
+function is not interleaved with anything — its AC and both streaming interfaces are contiguous and
+covered by its own IAD, so the condition behind the macOS bug never arises. It is not a fifth
+variant: the fix here is structurally different, not a different ordering. Melodee therefore needs
+no `FELUCCA_UAC_MIDI_LAST` equivalent, and moving MIDI behind the streams would not be a meaningful
+change.
+
+Other differences worth knowing:
+
+- **The configuration is rebuilt on the device.** `ua_cfg_build()` walks a template descriptor and
+  drops a disabled direction (MENU > USB AUDIO: IN+OUT, IN, OUT, OFF) — its streaming interface,
+  terminal pair and, for playback, the feature unit — then renumbers interfaces, rewrites the AC
+  header's collection and adjusts the IAD. MENU > USB INPUT switches capture between the stereo
+  master and four mono track stems (2 vs 4 channels; 16-bit packet 360 B, 24-bit 540 B). `bcdDevice`
+  becomes `3.30 + direction bits + 4-track bit` (3.30–3.37) so a host that caches descriptors sees
+  a new revision for each layout; the product string stays `Melodee FM-1`.
+- **Rate.** UAC1 at a fixed 44.1 kHz: one discrete frequency in the format descriptors, `GET_CUR` /
+  `GET_MIN` / `GET_MAX` = 44100, `GET_RES` = 0, and `SET_CUR` accepts and rounds anything else to
+  44.1 kHz. There is no 48 kHz mode and no resampler (the bsp's `FELUCCA_UAC_48K` has both). Hosts
+  commonly offer both 44.1 and 48 kHz for such a device; a client set to 48 kHz is resampled in the
+  host's audio stack, not by the firmware.
+- **Formats and endpoints.** Playback and capture each have alt 1 = PCM16 and alt 2 = PCM24. The
+  playback endpoint is asynchronous with an explicit 10.14 feedback endpoint (3 bytes, EP3 IN);
+  playback volume and mute are a standard UAC1 feature unit (FU5). The streams run from the TIMER5
+  ISR and are served by elapsed time, like TIMER5 MIDI.
+- **Identity.** `iSerialNumber` is 0 (the bug-2 fix is not here). Identity is the product string plus
+  the per-layout `bcdDevice` revision. That is enough for a host to re-read the descriptors after a
+  USB AUDIO / USB INPUT change, but not enough to tell two Melodee builds with the same layout
+  apart — the opposite trade-off from our serial.
+- **Device class.** The audio build is `misc/IAD` (`EF/02/01`); the MIDI-only build has no IAD and
+  uses class 0. The update loader is a separate MIDI-only build named `Melodee FM-1 Update`.
+
+On macOS 15 a stock Melodee build enumerates with working input and output, including the four-channel
+capture, with no descriptor patch (tested on the device): the computer sees both the playback and the
+recording stream, and can select either rate its stack offers. The four-track option is selected on
+the FM-1 (MENU > USB INPUT) and the host then sees four input channels; the stereo master is the
+default.
 
 ### Bug 2 — stale MIDI device name (AMB-1 stuck on LOOM-8)
 
@@ -657,6 +758,8 @@ firmware installed over USB-MIDI keeps whatever SPL is already on the device. V1
 | `firmware/engines is empty` | run `setup.sh` (it links `clones/felucca/firmware/engines` to `clones/felucca-engines`) |
 | `deploy-*.sh: no package in ...` | run the matching build first; a release build is named `NAME-X.Y.fwsc` and is picked automatically |
 | template build: `undefined reference to usr_timeout_del` | the pinned SDK cannot link the BLE template; use the script's default `--no-ble` (or SDK V1.2.1) |
+| `warning: SDK ... differs from AC79NN_SDK_V1.2.1` (Melodee build) | expected: Melodee checks its tested SDK (V1.2.1), the pinned one is V1.2.14 and only warns; see §2 |
+| Melodee: `Unsupported wl82loader.bin` from `tools/fm1_recover.py` | the tool accepts only the V1.2.1 helper Melodee ships, and prefers the (V1.2.14) `$AC79_SDK` one when set; pass `--loader clones/melodee/assets/recovery/wl82loader.bin` or unset `AC79_SDK`; `verify-melodee.sh` already does this |
 | macOS shows the old MIDI name | CoreMIDI caches per VID/PID/serial: unplug, delete the stale entry in Audio MIDI Setup → MIDI Studio, replug. Each build here reports its identity as the serial, so switching between LOOM-8, AMB-1, Felucca, ZEN-1, TONITOR and SLOOP gives distinct entries |
 | Linux card named "pid.codes Test PID" | host-side naming; see the pid.codes note above |
 
