@@ -153,7 +153,7 @@ radio).
 Build; writes `clones/fm1-base/template/build/template-usb.fwsc`:
 
 ```sh
-./scripts/build-template.sh
+FM1B_MIRROR=1 FELUCCA_UAC_MIDI_LAST=1 FELUCCA_UAC_IAD=1 ./scripts/build-template.sh
 ```
 
 fm1-base's host tests, including the USB descriptor matrix (run `build-template.sh` first):
