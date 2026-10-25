@@ -1,8 +1,30 @@
-# fm-1-experiments
+# fm1-experiments
 
 Scratch repo for M-VAVE FM-1 firmware experiments, maintained mostly by an LLM following this
 file. It pins twelve upstream repositories at known commits, keeps our changes as patch series, and
 gives each firmware its own build, verify and deploy script.
+
+## Contents
+
+- [1. Prerequisites](#1-prerequisites)
+- [2. Build and deploy](#2-build-and-deploy)
+  - [LOOM-8](#loom-8-fm1-loom)
+  - [AMB-1](#amb-1-fm1-amb)
+  - [fm1-base template](#fm1-base-template-the-base-template)
+  - [Felucca](#felucca-hugeltonfelucca)
+  - [ZEN-1](#zen-1-zen-1)
+  - [TONITOR](#tonitor-tonitor)
+  - [SLOOP](#sloop-sloop-fm1)
+  - [Dinghy](#dinghy-dinghy)
+  - [CS-1](#cs-1-cs-1)
+  - [Melodee](#melodee-melodee)
+- [3. Pinned revisions](#3-pinned-revisions)
+- [4. Layout](#4-layout)
+- [5. Patches](#5-patches)
+- [6. Bumping a pin](#6-bumping-a-pin)
+- [7. Findings](#7-findings)
+- [8. Troubleshooting](#8-troubleshooting)
+- [9. Recovery](#9-recovery)
 
 Ten firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
 **AMB-1** ([fm1-amb](https://github.com/charlesvestal/fm1-amb)) sit on the shared fm1-base; fm1-base's
@@ -54,7 +76,7 @@ them to point elsewhere.
 
 ---
 
-## 2. Build and deploy, per firmware
+## 2. Build and deploy
 
 One setup, then each firmware has its own scripts. Every script resolves the repo root itself, so
 the blocks below work from any directory. **One block is one action** — an IDE's run action passes
