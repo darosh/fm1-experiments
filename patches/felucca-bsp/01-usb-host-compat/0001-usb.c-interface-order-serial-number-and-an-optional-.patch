@@ -1,4 +1,4 @@
-From 1e3595bb21346ef4750dfe34722b705827fa62d1 Mon Sep 17 00:00:00 2001
+From 63379ac669133a6a888e62561b81127c793b5168 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Fri, 23 Oct 2026 18:05:21 +0200
 Subject: [PATCH] usb.c: interface order, serial number, and an optional IAD
@@ -24,15 +24,15 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  1 file changed, 119 insertions(+), 13 deletions(-)
 
 diff --git a/chip/usb.c b/chip/usb.c
-index bdf6769..8b2ecb8 100644
+index a1e03a5..c60b3bb 100644
 --- a/chip/usb.c
 +++ b/chip/usb.c
-@@ -26,7 +26,13 @@
-  * FELUCCA_UAC_OUT=1 (with FELUCCA_UAC) adds a USB audio output too: the computer plays through the FM-1 (16-bit
+@@ -28,7 +28,13 @@
   * stereo, 44.1 kHz, EP4 OUT isochronous adaptive). uac_service takes each packet into a ring (nested in the render
   * too); uac_play, after each render, adds it to the output, resampled to the I2S clock (~44,117.6 Hz): the ring's
-- * fill steers the rate, so it neither runs dry nor overflows. */
-+ * fill steers the rate, so it neither runs dry nor overflows.
+  * fill steers the rate, so it neither runs dry nor overflows.
+- * FELUCCA_USB_HOST=1 adds opt-in MIDI host mode; see docs/USB_HOST.md for the main-loop contract. */
++ * FELUCCA_USB_HOST=1 adds opt-in MIDI host mode; see docs/USB_HOST.md for the main-loop contract.
 + * FELUCCA_UAC_AC_COLLECT=1 / FELUCCA_UAC_MIDI_LAST=1 (plain builds, FELUCCA_UAC only): the AC
 + * header's collection stops naming MIDI, and the MIDI function moves behind the streaming
 + * interfaces (AC, AS, [ASO], MIDI) instead of between them: for the macOS 13-15 audio bug
@@ -40,9 +40,9 @@ index bdf6769..8b2ecb8 100644
 + * FELUCCA_USB_SERIAL (default FELUCCA_ID): the device's own serial number string, so a host tells
 + * firmwares sharing a VID/PID apart; the update loader keeps iSerialNumber 0. */
  #include "fm1_usb.h"   /* registers (chip/) */
- #ifndef FELUCCA_CDC
- #define FELUCCA_CDC 0
-@@ -40,6 +46,36 @@
+ /* Host is opt-in and excluded from update loaders, even with a global build flag. */
+ #ifndef FELUCCA_USB_HOST
+@@ -50,6 +56,36 @@
  #ifndef FELUCCA_UAC_OUT
  #define FELUCCA_UAC_OUT 0
  #endif
@@ -79,7 +79,7 @@ index bdf6769..8b2ecb8 100644
  #if !FELUCCA_UAC
  #undef FELUCCA_UAC_48K
  #define FELUCCA_UAC_48K 0
-@@ -312,11 +348,32 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
+@@ -328,11 +364,32 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
  #else
  #define FMT_LEN 0
  #endif
@@ -113,7 +113,7 @@ index bdf6769..8b2ecb8 100644
      12, 0x24, 2, 1, 0x03, 0x06, 0, 2, 0x03, 0x00, 0, 0,    /* input terminal 1: line, 2 ch (L R) */      \
      9, 0x24, 3, 2, 0x01, 0x01, 0, 1, 0,                    /* output terminal 2: USB streaming, from 1 */ \
      12, 0x24, 2, 3, 0x01, 0x01, 0, 2, 0x03, 0x00, 0, 0,    /* input terminal 3: USB streaming, 2 ch */   \
-@@ -331,7 +388,7 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
+@@ -347,7 +404,7 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
  #else
  #define D_AC(a)                                                                                      \
      9, 4, (a), 0, 0, 1, 1, 0, 0,                                                                     \
@@ -122,7 +122,7 @@ index bdf6769..8b2ecb8 100644
      12, 0x24, 2, 1, 0x03, 0x06, 0, 2, 0x03, 0x00, 0, 0,    /* input terminal 1: line, 2 ch (L R) */      \
      9, 0x24, 3, 2, 0x01, 0x01, 0, 1, 0,                    /* output terminal 2: USB streaming, from 1 */
  #define D_ASO(o)
-@@ -359,9 +416,17 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
+@@ -375,9 +432,17 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
      5, 0x25, 1, 1, 1,                                                                                \
      9, 5, 0x81, 2, 64, 0, 0, 0, 0,                                                                   \
      5, 0x25, 1, 1, 3,
@@ -142,7 +142,7 @@ index bdf6769..8b2ecb8 100644
  #define D_CDC(c)                                                                                     \
      D_IAD((c), 2, 2, 2, 1),                                /* IAD: CDC ACM */                           \
      9, 4, (c), 0, 1, 2, 2, 1, 0,                           /* communication */                          \
-@@ -374,16 +439,50 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
+@@ -390,16 +455,50 @@ static uint32_t midi_out_room(void)                  /* free slots in the out ri
      7, 5, 0x03, 2, 64, 0, 0,                               /* EP3 OUT bulk */                           \
      7, 5, 0x83, 2, 64, 0, 0,                               /* EP3 IN bulk */
  #define CDC_LEN 66                                         /* with its IAD */
@@ -195,7 +195,7 @@ index bdf6769..8b2ecb8 100644
  typedef char cfg_plain_len_ok[sizeof CFG_DESC_PLAIN == CFG_LEN_PLAIN ? 1 : -1];
  #if FELUCCA_CDC
  #define CFG_LEN (9 + 8 + AUD_LEN + CDC_LEN)
-@@ -423,8 +522,8 @@ static uint8_t usb_cdc_on = FELUCCA_CDC_DEFAULT != 0;      /* the console is pre
+@@ -439,8 +538,8 @@ static uint8_t usb_cdc_on = FELUCCA_CDC_DEFAULT != 0;      /* the console is pre
  #define USB_CDC_ON 0
  #define AUD_IF 0u
  #endif
@@ -206,7 +206,7 @@ index bdf6769..8b2ecb8 100644
  static const uint8_t STR0[4] = {4, 3, 0x09, 0x04};
  static const uint8_t STR1[] = {42, 3, 'H', 0, 0xFC, 0, 'g', 0, 'e', 0, 'l', 0, 't', 0, 'o', 0, 'n', 0, ' ', 0, 'I', 0,
                                 'n', 0, 's', 0, 't', 0, 'r', 0, 'u', 0, 'm', 0, 'e', 0, 'n', 0, 't', 0, 's', 0};
-@@ -435,10 +534,11 @@ static const uint8_t STR2[] = {30, 3, 'F', 0, 'e', 0, 'l', 0, 'u', 0, 'c', 0, 'c
+@@ -451,10 +550,11 @@ static const uint8_t STR2[] = {30, 3, 'F', 0, 'e', 0, 'l', 0, 'u', 0, 'c', 0, 'c
  static const uint8_t STR2[] = {16, 3, 'F', 0, 'e', 0, 'l', 0, 'u', 0, 'c', 0, 'c', 0, 'a', 0};
  #endif
  
@@ -222,7 +222,7 @@ index bdf6769..8b2ecb8 100644
  static uint8_t usb_str_buf[2 + 2 * 31];
  
  static int usb_str_desc(const char *s, const uint8_t **d, uint16_t *l)
-@@ -489,6 +589,12 @@ static int get_desc(uint32_t wvalue, const uint8_t **d, uint16_t *l)
+@@ -505,6 +605,12 @@ static int get_desc(uint32_t wvalue, const uint8_t **d, uint16_t *l)
              *d = STR2;
              *l = sizeof STR2;
              return 1;

@@ -1,7 +1,7 @@
-From e856b1e05c070162c163597355c2a208e9eeb1fd Mon Sep 17 00:00:00 2001
+From a465d4c97f16c7a96d2fec24bab936bb72e494cc Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
-Date: Mon, 26 Oct 2026 09:12:41 +0100
-Subject: [PATCH] gfx.c: the MIXED text blend, behind MIXED_RENDERING=1
+Date: Mon, 26 Oct 2026 09:39:13 +0100
+Subject: [PATCH 5/8] gfx.c: the MIXED text blend, behind MIXED_RENDERING=1
 
 The partial-coverage blend is done in gamma-encoded RGB565, so a 20 % edge of a
 150-grey glyph is drawn at 30/255 where linear light gives ~70/255; on the panel
@@ -67,19 +67,19 @@ index 4d4f45c..5bf4089 100644
                      cv_px[(uint32_t)py * cv_w + (uint32_t)px] = swap16(c);
                  } else {
 diff --git a/tools/build.py b/tools/build.py
-index 39969b2..2f71caa 100755
+index 66c709f..a8fd61b 100755
 --- a/tools/build.py
 +++ b/tools/build.py
-@@ -753,9 +753,13 @@ def build_id():
+@@ -857,9 +857,13 @@ def build_id():
  
  
  def opt_flags():
 -    """the optional parts an fm1.toml turns on that need no SDK: the same on the device, the host and the web"""
--    return [f"-D{flag}=1" for key, flag in (("mirror", "FM1B_MIRROR"), ("backup", "FM1B_BACKUP"), ("cpu2", "FM1B_CPU2"))
+-    return [f"-D{flag}=1" for key, flag in (("mirror", "FM1B_MIRROR"), ("backup", "FM1B_BACKUP"), ("cpu2", "FM1B_CPU2"), ("usb_host", "FM1B_USB_HOST"))
 -            if (CONF.get(key) and os.environ.get(flag) != "0") or os.environ.get(flag) == "1"]   # (FM1B_MIRROR=1: a build with it, fm1.toml as it is; FM1B_BACKUP=0: without)
 +    """the optional parts an fm1.toml turns on that need no SDK: the same on the device, the host and the web;
 +    MIXED_RENDERING=1: the linear-light text blend (device/gfx.c), not the default sRGB one"""
-+    flags = [f"-D{flag}=1" for key, flag in (("mirror", "FM1B_MIRROR"), ("backup", "FM1B_BACKUP"), ("cpu2", "FM1B_CPU2"))
++    flags = [f"-D{flag}=1" for key, flag in (("mirror", "FM1B_MIRROR"), ("backup", "FM1B_BACKUP"), ("cpu2", "FM1B_CPU2"), ("usb_host", "FM1B_USB_HOST"))
 +             if (CONF.get(key) and os.environ.get(flag) != "0") or os.environ.get(flag) == "1"]   # (FM1B_MIRROR=1: a build with it, fm1.toml as it is; FM1B_BACKUP=0: without)
 +    if os.environ.get("MIXED_RENDERING") == "1":
 +        flags.append("-DMIXED_RENDERING=1")
@@ -87,3 +87,6 @@ index 39969b2..2f71caa 100755
  
  
  def build_host():
+-- 
+2.55.0
+

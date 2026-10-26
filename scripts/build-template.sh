@@ -7,11 +7,10 @@ set -eu
 need_clone fm1-base
 need_base_usb_patch
 
-# The template's fm1.toml has Bluetooth and Bluetooth-devices on. The pinned AC79 SDK (V1.2.14)
-# needs usr_timeout_del from the BLE shim, which fm1-base defines only in its WiFi build, so a BLE
-# template needs the V1.2.1 SDK its upstream README names. Without --host/--web, build the USB-only
-# template (template-usb.fwsc): screen, keys, sound, USB-MIDI and USB audio, which is enough to
-# flash and to exercise the platform.
+# The template's fm1.toml has Bluetooth and Bluetooth-devices on. patches/fm1-base/08-ble-timer-shim
+# gives the pinned AC79 SDK (V1.2.14) the usr_timeout_del its btctrler.a wants, so the BLE template
+# links now too. Without --host/--web, still build the USB-only template (template-usb.fwsc) by
+# default: the smaller package, enough to flash and to exercise the platform and the update path.
 case " $* " in
     *" --host "*|*" --web "*|*" --no-ble "*) ;;
     *) set -- --no-ble "$@" ;;

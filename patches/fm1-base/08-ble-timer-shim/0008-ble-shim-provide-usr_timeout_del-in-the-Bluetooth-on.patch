@@ -1,0 +1,39 @@
+From d80e2917facb3b5843c3556e456244210b0dc09b Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Mon, 26 Oct 2026 09:41:49 +0100
+Subject: [PATCH 8/8] ble/shim: provide usr_timeout_del in the Bluetooth-only
+ build
+
+AC79NN_SDK_V1.2.14's btctrler.a calls usr_timeout_del from multilink_schedule.c.o
+even when the config cuts multilinking down to LE_ADV | LE_SLAVE. The symbol
+lived only in ble/wifi/wifi_shim.c, so LOOM-8 v0.8.1's Bluetooth build (SDK
+V1.2.14) failed to link with "undefined reference to usr_timeout_del". Define it
+in the Bluetooth timer shim beside usr_timer_del, guarded by !SHIM_WIFI because
+the Wi-Fi shim owns the name there. It deletes a timer like JieLi's hardware
+timer path does.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ ble/shim/systimer.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/ble/shim/systimer.c b/ble/shim/systimer.c
+index b58eabd..9a19582 100644
+--- a/ble/shim/systimer.c
++++ b/ble/shim/systimer.c
+@@ -84,6 +84,12 @@ u16 usr_timeout_add(void *priv, void (*fn)(void *), u32 msec, u8 prio)
+ void sys_timer_del(u16 id) { stimer_t *t = get(id); if (t) t->used = 0; }
+ void sys_timeout_del(u16 id) { sys_timer_del(id); }
+ void usr_timer_del(u16 id) { sys_timer_del(id); }
++/* AC79NN_SDK_V1.2.14's btctrler.a (multilink_schedule.c.o) calls this even in the trimmed peripheral
++ * build; the Wi-Fi shim had it, the Bluetooth one did not, so the link failed (Wi-Fi's owns the name
++ * there) */
++#if !SHIM_WIFI
++void usr_timeout_del(u16 id) { sys_timer_del(id); }
++#endif
+ int sys_timer_modify(u16 id, u32 msec)
+ {
+     stimer_t *t = get(id);
+-- 
+2.55.0
+

@@ -131,7 +131,9 @@ Flash (`--info` prints the connected FM-1's identity and writes nothing):
 ```
 
 `build-loom.sh` passes its arguments to `fm1-loom/build.sh`: `--host` (host simulator), `--web`
-(browser emulator), `--demo` (mirroring for demos), `--release X.Y`, `--no-ble`.
+(browser emulator), `--demo` (mirroring for demos), `--release X.Y`, `--no-ble`. v0.8.1's `fm1.toml`
+turns Bluetooth MIDI and the USB MIDI host on in the default build (`--no-ble` builds `loom-usb.fwsc`
+without the radio); the image is 526180 B, with 90304 B of RAM used and the pool 97% full.
 
 ### AMB-1 (fm1-amb)
 
@@ -176,10 +178,11 @@ Flash the template (same update mode as above):
 ./scripts/deploy-template.sh
 ```
 
-The template's `fm1.toml` has Bluetooth on, but the pinned AC79 SDK (V1.2.14) does not link the
-BLE template: its `btctrler.a` wants `usr_timeout_del`, which fm1-base's shim defines only for its
-WiFi build (upstream documents SDK V1.2.1 for the template). `build-template.sh` therefore builds
-the USB-only template (`--no-ble`) unless you pass `--host`, `--web` or `--no-ble` yourself.
+The template's `fm1.toml` has Bluetooth on. Upstream documents SDK V1.2.1 for it; with the pinned
+V1.2.14 its `btctrler.a` wants `usr_timeout_del`, which fm1-base's shim defines only for its WiFi
+build — `patches/fm1-base/08-ble-timer-shim` supplies it, and the BLE template now links against
+V1.2.14 too. `build-template.sh` still builds the USB-only template (`--no-ble`) by default, the
+smaller package the update-path test uses; pass no flag to `build.py` directly for the BLE one.
 `verify-base.sh` runs fm1-base's whole suite; after `build-template.sh` its update-path test runs
 against the USB-only package (it borrows the `template.fwsc` name the test looks for).
 
@@ -457,10 +460,10 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 
 | repo | commit | role |
 |---|---|---|
-| `charlesvestal/fm1-loom` | `75e8607` (v0.7) | LOOM-8 |
+| `charlesvestal/fm1-loom` | `dfc94c6` (v0.8.1 + site republish) | LOOM-8 |
 | `charlesvestal/fm1-amb` | `188b0a42` (v1.3) | AMB-1 |
-| `charlesvestal/fm1-base` | `0944289` | the platform layer (both firmwares' `base`) |
-| `hugelton/felucca-bsp` | `b413cd8` | the chip layer (`fm1-base/bsp`) |
+| `charlesvestal/fm1-base` | `934e40d` | the platform layer (both firmwares' `base`) |
+| `hugelton/felucca-bsp` | `2cd696a` | the chip layer (`fm1-base/bsp`) |
 | `hugelton/Felucca` | `63f88ec` | Felucca (main, 5 commits past v1.6.1) |
 | `hugelton/Felucca-Engines` | `c46e008` | Felucca's `firmware/engines` submodule |
 | `aceyprime/zen-1` | `ec92952` (v1.2) | ZEN-1 |
@@ -484,8 +487,8 @@ not on any branch of that repository. Mutable Dreams' pin is two things: the v1.
 publishes the release (and its checksums), and the SHA-256 of the source archive that commit
 carries (the repository has no source tree of its own).
 One fm1-base and one felucca-bsp are shared by both fm1-base firmwares, so the base is pinned to its
-own `main` rather than to either firmware's submodule pointer (`42dc630` for LOOM-8, `15dff6d` for
-AMB-1 — both are ancestors of the pin). Felucca-Engines is pinned to the commit Felucca's own tree
+own `main` rather than to either firmware's submodule pointer (`934e40d` for LOOM-8 v0.8.1 — the
+pin itself — and `15dff6d` for AMB-1, an ancestor). Felucca-Engines is pinned to the commit Felucca's own tree
 names, not to engines `main`: engines `main` adds the PHASE engine and an FS-rate refactor, while
 Felucca has its own `firmware/src/eng_phase.c` and goldens that pair with the older sources. The SDK
 tag and the toolchain package are the newest published.
@@ -558,12 +561,15 @@ checkout (patches 03 in each set).
 patches/
   felucca-bsp/01-usb-host-compat/   usb.c: interface order, serial number, an optional IAD
   fm1-base/01-usb-host-compat/      build.py: usb_midi_last, usb_iad, usb_serial; descriptor test
-  fm1-base/02-sdk-v1.2.14/          build.py: the SDK hashes of the installed V1.2.14
+  fm1-base/02-sdk-v1.2.14/          build.py: the SDK hashes of the installed V1.2.14; the BLE trim
+                                    accepts V1.2.14's multilink configuration (already 0)
   fm1-base/03-symlinked-bsp/        build.py: the source root covers a symlinked bsp
   fm1-base/04-esm-modules/          package.json: the web/ modules are ESM
   fm1-base/05-mixed-text-blend/     gfx.c: the MIXED coverage blend, behind MIXED_RENDERING=1 (build.py
                                     forwards it)
   fm1-base/07-stale-builder/        build.py: replace a toolchain container whose mount went stale
+  fm1-base/08-ble-timer-shim/       ble/shim: usr_timeout_del, which V1.2.14's btctrler.a wants in a
+                                    Bluetooth-only build
   fm1-loom/01-usb-host-compat/      LOOM-8's USB names and its descriptor flags
   fm1-loom/02-mixed-text-blend/     gfx_loom.c: the same MIXED blend, behind MIXED_RENDERING=1
   fm1-amb/01-usb-host-compat/       AMB-1's: the same descriptor set, and its USB names
@@ -593,7 +599,7 @@ patches/
 
 - Generated with `git format-patch`, applied with `git am --3way`, so the commit messages and
   authorship survive and applied work shows up as commits on the `experiments` branch.
-- The `NN-` prefix on the problem directory defines order. It matters: fm1-base's patches all
+- The `NN-` prefix on the problem directory defines order. It matters: most of fm1-base's patches
   touch `tools/build.py` and must apply in this order.
 - The fm1-base patches are shared by both firmwares (one base clone); the fm1-amb patch turns the
   same `usb_midi_last`/`usb_iad` on in AMB-1's `fm1.toml`, so both firmwares present the same
@@ -863,8 +869,9 @@ firmware installed over USB-MIDI keeps whatever SPL is already on the device. V1
   what makes the template — an app *inside* fm1-base — build with a symlinked bsp).
 - `chip/uac_fir.h` is absent at this pin, so host test builds must define `FELUCCA_UAC_48K=0`
   (the descriptor test does).
-- The template's Bluetooth build needs SDK V1.2.1 (see §2); its USB-only build works with the
-  pinned V1.2.14.
+- The template's Bluetooth build links against the pinned V1.2.14 once
+  `patches/fm1-base/08-ble-timer-shim` provides `usr_timeout_del`; before that it needed SDK
+  V1.2.1. Its USB-only build always worked with V1.2.14.
 - The GUI arm of the bsp (`FELUCCA_USB_LAYOUT`, CDC console) is orthogonal and untested here; the
   new flags `#error` on CDC builds rather than multiplying the matrix.
 - SLOOP's static target budget was measured with an older toolchain; on a stock checkout of its pin
@@ -891,7 +898,7 @@ firmware installed over USB-MIDI keeps whatever SPL is already on the device. V1
 | `error: ... neither applies nor is already applied` mid-session | `git -C clones/<repo> am --abort` |
 | `firmware/engines is empty` | run `setup.sh` (it links `clones/felucca/firmware/engines` to `clones/felucca-engines`) |
 | `deploy-*.sh: no package in ...` | run the matching build first; a release build is named `NAME-X.Y.fwsc` and is picked automatically |
-| template build: `undefined reference to usr_timeout_del` | the pinned SDK cannot link the BLE template; use the script's default `--no-ble` (or SDK V1.2.1) |
+| `undefined reference to usr_timeout_del` in a BLE build | `patches/fm1-base/08-ble-timer-shim` is missing (the symbol lives in the Wi-Fi shim otherwise); re-run `setup.sh`, or use `--no-ble` |
 | `warning: SDK ... differs from AC79NN_SDK_V1.2.1` (Melodee or Mutable Dreams build) | expected: both check their tested SDK (V1.2.1), the pinned one is V1.2.14 and only warns; see §2 |
 | Mutable Dreams: `no clones/mutable-dreams/src` | `setup.sh` could not unpack the source archive; install `unzip`, or the archive's SHA-256 no longer matches the pin (see `revisions.env`) |
 | Melodee: `Unsupported wl82loader.bin` from `tools/fm1_recover.py` | the tool accepts only the V1.2.1 helper Melodee ships, and prefers the (V1.2.14) `$AC79_SDK` one when set; pass `--loader clones/melodee/assets/recovery/wl82loader.bin` or unset `AC79_SDK`; `verify-melodee.sh` already does this |

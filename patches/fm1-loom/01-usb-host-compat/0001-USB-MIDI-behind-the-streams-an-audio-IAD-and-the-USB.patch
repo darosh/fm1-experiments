@@ -1,7 +1,8 @@
-From 4c708d49a674e3245349e754962a6896f5717f88 Mon Sep 17 00:00:00 2001
+From 21b5a9c0d6c5a93ea5240bd4fcd0c8705a4463cb Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Fri, 23 Oct 2026 18:04:56 +0200
-Subject: [PATCH] USB: MIDI behind the streams, an audio IAD, and the USB names
+Subject: [PATCH 1/2] USB: MIDI behind the streams, an audio IAD, and the USB
+ names
 
 Enables fm1-base's usb_midi_last and usb_iad:
 
@@ -23,10 +24,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  1 file changed, 6 insertions(+), 2 deletions(-)
 
 diff --git a/app/fm1.toml b/app/fm1.toml
-index d83c2e6..b0ab655 100644
+index 9094947..a89ace6 100644
 --- a/app/fm1.toml
 +++ b/app/fm1.toml
-@@ -1,11 +1,15 @@
+@@ -1,8 +1,8 @@
  # LOOM-8's build settings (fm1-base's tools/build.py: ./build.sh)
  name = "loom"                  # the build's files: loom.fwsc, loom-X.Y.fwsc, loom_host (APP_NAME, LOOM-8, is in app.h)
  id_prefix = "FM-1_10"          # package identity: dev FM-1_1000, releases FM-1_10XXYYZZ (every single digit was taken)
@@ -34,9 +35,13 @@ index d83c2e6..b0ab655 100644
 -usb_product = "LOOM-8 FM-1"
 +usb_manufacturer = "FM-1"      # Manufacturer in Audio MIDI Setup
 +usb_product = "FM-1 LOOM-8"    # Model, and the CoreAudio / CoreMIDI device name
- ble = false                    # no radio: LOOM-8 needs the RAM (and stays GPL-3.0)
+ ble = true                     # Bluetooth MIDI with a computer (the ble-spike branch)
+ ble_trim = true                # a MIDI peripheral only: JieLi's central, classic and test code cut (base/tools/build.py)
+ ble_no_pairing = true          # no pairing or encryption: Bluetooth MIDI needs neither (iOS and macOS connect; -19 KB flash)
+@@ -11,6 +11,10 @@ ble_heap_kb = 12               # its heap at 12 KB, not 24 (7.1 KB at most: a li
  usb_audio_in = true            # the master output recordable over USB (Setup's USB AUDIO: follows the knob, or full)
  usb_audio_out = false
+ usb_host = true                # the USB port as a MIDI host (Setup's USB PORT): a controller or a synth, through a powered hub
 +usb_midi_last = true           # MIDI after the streaming interfaces (macOS audio, Felucca#67): bisected,
 +                               # this is the one that matters; it also keeps MIDI out of the AC collection
 +usb_iad = true                 # the audio function's IAD (FELUCCA_UAC_IAD): descriptor hygiene,

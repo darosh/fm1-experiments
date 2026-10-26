@@ -1,8 +1,8 @@
-From f16a9f9a99a5dc2431587e551b8a31626bd7f8ac Mon Sep 17 00:00:00 2001
+From e2ac7657f8be55ce5261a25a4bcfaaec70cb428f Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Sat, 24 Oct 2026 12:18:35 +0200
-Subject: [PATCH] build.py: ROOT covers a symlinked bsp, so the template builds
- from fm1-base alone
+Subject: [PATCH 3/8] build.py: ROOT covers a symlinked bsp, so the template
+ builds from fm1-base alone
 
 The template is an app inside fm1-base, so ROOT was commonpath(fm1-base, template) = fm1-base.
 With bsp/ a symlink to a checkout outside it (one felucca-bsp shared by every firmware), bsp's
@@ -16,10 +16,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/tools/build.py b/tools/build.py
-index 04e57e8..39969b2 100755
+index 4ba6f8e..66c709f 100755
 --- a/tools/build.py
 +++ b/tools/build.py
-@@ -846,7 +846,9 @@ def main():
+@@ -950,7 +950,9 @@ def main():
      STEM = NAME + ("-usb" if CONF.get("ble") and not BLE else "")
      OUT = APP / "build"
      GEN, LDR = OUT / "gen", OUT / "loader"

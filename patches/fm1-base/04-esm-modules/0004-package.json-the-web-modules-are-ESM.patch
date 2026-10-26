@@ -1,7 +1,7 @@
-From 10a00ca3cff264228d5fb78fcd8b3d09f1012ac9 Mon Sep 17 00:00:00 2001
+From f463df55d56581b72b3b614bb97313c99b6d76b3 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Sat, 24 Oct 2026 12:20:27 +0200
-Subject: [PATCH] package.json: the web/ modules are ESM
+Subject: [PATCH 4/8] package.json: the web/ modules are ESM
 
 web/fm1pkg.js and web/fm1ota.js are ES modules, and the Node tests import them from .mjs. Without a
 package.json Node guesses a .js file's type, and an ambient one above the checkout ("type":

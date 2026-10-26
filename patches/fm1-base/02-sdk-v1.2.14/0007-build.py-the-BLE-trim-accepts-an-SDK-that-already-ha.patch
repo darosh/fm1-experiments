@@ -1,0 +1,36 @@
+From de05ae7baa6f13a2c5242ca2f274b6b8586c8e5b Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Mon, 26 Oct 2026 09:41:01 +0100
+Subject: [PATCH 7/8] build.py: the BLE trim accepts an SDK that already has
+ the multilink cuts at 0
+
+AC79NN_SDK_V1.2.14's lib_btctrler_config.c already sets
+config_btctler_le_master_multilink and config_multilink_support_esco_enalbe to 0
+in both branches, where V1.2.1 set them to 1. ble_trim's substitution required
+the literal 1 and stopped the build ("the SDK has changed"). Match any value and
+write 0: the cuts are idempotent, and the V1.2.14 pin builds LOOM-8 v0.8.1's
+Bluetooth stack.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ tools/build.py | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/build.py b/tools/build.py
+index f6f5167..2f50624 100755
+--- a/tools/build.py
++++ b/tools/build.py
+@@ -377,8 +377,8 @@ BLE_CONFIG = {"apps/common/config/log_config/lib_btctrler_config.c": [
+     (r"(const int CONFIG_LMP_MASTER_ESCO_ENABLE\s*=\s*)1", r"\g<1>0"),
+     (r"(const int CONFIG_BREDR_INQUIRY\s*=\s*)1", r"\g<1>0"),
+     (r"(const int config_btctler_dual_a2dp\s*=\s*)1", r"\g<1>0"),
+-    (r"(const int config_btctler_le_master_multilink\s*=\s*)1", r"\g<1>0"),
+-    (r"(const int config_multilink_support_esco_enalbe\s*=\s*)1", r"\g<1>0")]}
++    (r"(const int config_btctler_le_master_multilink\s*=\s*)[^;]+", r"\g<1>0"),
++    (r"(const int config_multilink_support_esco_enalbe\s*=\s*)[^;]+", r"\g<1>0")]}
+ # ble_no_pairing = true (with ble_trim): no pairing or encryption either (the security manager). Bluetooth MIDI needs
+ # neither: an iPhone and a Mac connect, MIDI both ways (LOOM-8, 2026-10-25)
+ BLE_CONFIG_NO_SM = {"apps/common/config/log_config/lib_btctrler_config.c": [
+-- 
+2.55.0
+

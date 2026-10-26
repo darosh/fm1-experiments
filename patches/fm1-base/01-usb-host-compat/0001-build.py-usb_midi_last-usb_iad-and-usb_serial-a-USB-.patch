@@ -1,7 +1,7 @@
-From d84c40ae0ff7faef5744ce4c2fab78c84025f546 Mon Sep 17 00:00:00 2001
+From 2544f41d3dd944bfbaff7fa4916337549826b909 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Sat, 24 Oct 2026 11:06:28 +0200
-Subject: [PATCH] build.py: usb_midi_last, usb_iad and usb_serial; a USB
+Subject: [PATCH 1/8] build.py: usb_midi_last, usb_iad and usb_serial; a USB
  descriptor test
 
 usb_midi_last moves the MIDI function behind the streaming interfaces (AC, AS, [ASO], MIDI).
@@ -28,7 +28,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  create mode 100644 tests/usb_desc_test.c
 
 diff --git a/tests/run_tests.sh b/tests/run_tests.sh
-index f4e9e90..5ef7584 100755
+index 4413a6b..657fbf1 100755
 --- a/tests/run_tests.sh
 +++ b/tests/run_tests.sh
 @@ -26,6 +26,21 @@ run() {
@@ -52,7 +52,7 @@ index f4e9e90..5ef7584 100755
 +usb_desc serial '-DFELUCCA_UAC=1 -DFELUCCA_USB_SERIAL=\"FM-1_1000\"'
  run fastmath sh -c "$CC -O2 -w -o $OUT/fastmath_test tests/fastmath_test.c -lm && $OUT/fastmath_test"
  run installer "$PY" tests/install_test.py
- # the web installer's m-bootloader step (web/fm1ota.js installBoot) against a simulated FM-1
+ # the web installer's m-bootloader step (web/fm1ota.js installBoot) against a simulated FM-1, and finding the FM-1 by
 diff --git a/tests/usb_desc_test.c b/tests/usb_desc_test.c
 new file mode 100644
 index 0000000..724cc53
@@ -248,13 +248,13 @@ index 0000000..724cc53
 +    return fails ? 1 : 0;
 +}
 diff --git a/tools/build.py b/tools/build.py
-index 34a2e42..5c8e4dd 100755
+index 8f7c195..4598e2e 100755
 --- a/tools/build.py
 +++ b/tools/build.py
-@@ -34,6 +34,13 @@ APP_DIR holds the app (app.h, app.c, its sources) and its fm1.toml:
-   ble_central = true         and the FM-1 connects to Bluetooth MIDI devices too (FM1B_BLE_CENTRAL), beside a computer
-   usb_audio_in = true        the FM-1 recordable over USB (FM1B_UAC; the default: true)
-   usb_audio_out = true       a computer plays through the FM-1 over USB (FM1B_UAC_OUT; the default: true)
+@@ -43,6 +43,13 @@ APP_DIR holds the app (app.h, app.c, its sources) and its fm1.toml:
+   usb_host = true            the USB port as a MIDI host when the app asks (FM1B_USB_HOST: felucca-bsp's
+                              FELUCCA_USB_HOST, docs/USB_HOST.md; plat_usb_host in plat.h): a USB-MIDI controller or
+                              synth, directly or behind one powered hub (the FM-1 gives no power). Boot is a device
 +  usb_midi_last = true       the MIDI function after the streaming interfaces (FELUCCA_UAC_MIDI_LAST;
 +                             macOS audio, #67). It also keeps MIDI out of the AC header's collection; the
 +                             collection alone (FELUCCA_UAC_AC_COLLECT in the environment) is not enough
@@ -265,7 +265,7 @@ index 34a2e42..5c8e4dd 100755
    mirror = true              the screen and panel mirrored over USB (FM1B_MIRROR: device/mirror.c; web/mirror/,
                               tools/fm1_mirror.py), the panel played from the host; FM1B_MIRROR=1 in the environment
                               builds it in whatever fm1.toml says (an app's demo build), FM1B_POOL_SPARE=N the
-@@ -446,12 +453,20 @@ def build_app():
+@@ -550,12 +557,20 @@ def build_app():
      for key, flag in (("usb_audio_in", "FM1B_UAC"), ("usb_audio_out", "FM1B_UAC_OUT")):
          if key in CONF and flag not in os.environ:
              flags.append(f"-D{flag}={int(bool(CONF[key]))}")

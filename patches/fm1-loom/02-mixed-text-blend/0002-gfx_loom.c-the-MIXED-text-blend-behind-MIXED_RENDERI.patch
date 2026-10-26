@@ -1,7 +1,8 @@
-From 64b8ed11bc4c3a605dbc764ef246af0a89d4cb20 Mon Sep 17 00:00:00 2001
+From eeee60578bad53ea374c59f0160abbe8a5ec6035 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Mon, 26 Oct 2026 09:12:41 +0100
-Subject: [PATCH] gfx_loom.c: the MIXED text blend, behind MIXED_RENDERING=1
+Subject: [PATCH 2/2] gfx_loom.c: the MIXED text blend, behind
+ MIXED_RENDERING=1
 
 Same change as fm1-base's gfx.c: partial coverage is remapped for linear light
 only where the ink is lighter than the pixel behind it, so light-on-dark text
@@ -17,10 +18,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  1 file changed, 20 insertions(+)
 
 diff --git a/app/gfx_loom.c b/app/gfx_loom.c
-index 4b75855..e42cb20 100644
+index 32039f8..10a8b01 100644
 --- a/app/gfx_loom.c
 +++ b/app/gfx_loom.c
-@@ -217,11 +217,22 @@ static uint32_t loom_glyph(const loom_font_t *f, uint32_t ch)
+@@ -219,11 +219,22 @@ static uint32_t loom_glyph(const loom_font_t *f, uint32_t ch)
      return ch - f->first;
  }
  
@@ -43,7 +44,7 @@ index 4b75855..e42cb20 100644
  #ifdef GFX_AUDIT
      const char *s0 = s;
      int32_t ix0 = 1 << 20, iy0 = 1 << 20, ix1 = -(1 << 20), iy1 = -(1 << 20), clip = 0, shown = 0;
-@@ -259,6 +270,15 @@ static int32_t loom_text(int32_t x, int32_t y, const loom_font_t *f, const char
+@@ -261,6 +272,15 @@ static int32_t loom_text(int32_t x, int32_t y, const loom_font_t *f, const char
  #endif
                  if (!a || (uint32_t)px >= cv_w || py < cv_y0 || py >= cv_y1)
                      continue;
@@ -59,3 +60,6 @@ index 4b75855..e42cb20 100644
                  if (a == 15u) {
                      cv_px[(uint32_t)py * cv_w + (uint32_t)px] = swap16(c);
                  } else {
+-- 
+2.55.0
+
