@@ -1,0 +1,39 @@
+From 663439b38ee1d3b6785efe5d2bf7284260c57258 Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Mon, 26 Oct 2026 08:27:39 +0100
+Subject: [PATCH] build.py: replace a builder container whose mount went stale
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The toolchain container lives for an hour and is keyed by the source root, so
+it survives a re-clone. If the tree is deleted and re-created (scripts/setup.sh
+from scratch) its bind mount is dead, and every docker exec — even `pwd` —
+fails with "current working directory is outside of container mount namespace
+root", which reads like a build error. Probe the running container with a
+trivial exec and replace it when it cannot start.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ tools/build.py | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/tools/build.py b/tools/build.py
+index 39969b2..257d8da 100755
+--- a/tools/build.py
++++ b/tools/build.py
+@@ -197,7 +197,10 @@ def _builder_start():
+         return _BUILDER
+     name = "jieli-" + hashlib.sha1(str(ROOT).encode()).hexdigest()[:10]
+     st = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name], capture_output=True, text=True)
+-    if st.stdout.strip() != "true":
++    running = st.stdout.strip() == "true"
++    if running:                     # a container outlives a re-clone: its bind mount may be gone
++        running = subprocess.run(["docker", "exec", name, "true"], capture_output=True).returncode == 0
++    if not running:
+         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+         r = subprocess.run(["docker", "run", "-d", "--rm", "--name", name, "--platform", "linux/amd64",
+                             "-v", f"{ROOT}:/work", "-v", f"{toolchain()}:/opt/jieli:ro", "-w", "/work",
+-- 
+2.55.0
+

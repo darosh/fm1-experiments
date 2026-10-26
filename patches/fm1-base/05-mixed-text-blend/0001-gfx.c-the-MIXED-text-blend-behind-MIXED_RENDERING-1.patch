@@ -1,0 +1,89 @@
+From e856b1e05c070162c163597355c2a208e9eeb1fd Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Mon, 26 Oct 2026 09:12:41 +0100
+Subject: [PATCH] gfx.c: the MIXED text blend, behind MIXED_RENDERING=1
+
+The partial-coverage blend is done in gamma-encoded RGB565, so a 20 % edge of a
+150-grey glyph is drawn at 30/255 where linear light gives ~70/255; on the panel
+that reads as a black gap beside the stem (the ghost columns seen at high zoom).
+
+Light ink on a darker pixel now has its coverage remapped before the blend, but
+only when the build asks for it: MIXED_RENDERING=1 selects the linear-light
+blend, and without it the build is upstream's. build.py forwards the variable as
+-DMIXED_RENDERING=1 for the device, the host and the web, so both renders can be
+compared from one checkout.
+
+Dark ink on a light box keeps the raw coverage: there the darker fringe is the
+stem darkening small dark-on-light text needs. Measured on the FM-1 with
+fm1-base's template and the Font Rendering test firmware.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ device/gfx.c   | 20 ++++++++++++++++++++
+ tools/build.py | 10 +++++++---
+ 2 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/device/gfx.c b/device/gfx.c
+index 4d4f45c..5bf4089 100644
+--- a/device/gfx.c
++++ b/device/gfx.c
+@@ -149,11 +149,22 @@ static uint32_t glyph(const felucca_font_t *f, uint32_t ch)
+     return ch - f->first;
+ }
+ 
++#ifdef MIXED_RENDERING
++/* partial coverage, remapped for linear light when the ink is lighter than what is behind it: the
++ * sRGB-space blend below draws a 20 % edge at 30/255 instead of 70/255, which on the FM-1's panel
++ * reads as a black gap beside the stem. Dark ink on a light box keeps the raw coverage: there the
++ * same blend's darker fringe is the stem darkening the eye expects (2026-10). */
++static const uint8_t CV_ALPHA_UP[16] = {0, 4, 5, 7, 8, 9, 9, 10, 11, 11, 12, 13, 13, 14, 15, 15};
++#endif
++
+ /* text in colour c, each pixel's coverage blended over what is already on the canvas (an
+  * anti-aliased face on a coloured box gets no dark fringe); returns the end x */
+ static int32_t cv_text(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c)
+ {
+     uint32_t r = c >> 11, g = (c >> 5) & 63u, b = c & 31u;
++#ifdef MIXED_RENDERING
++    uint32_t fi = r * 2u + g * 3u + b;
++#endif
+     for (; *s; s++) {
+         uint32_t gi = glyph(f, (uint8_t)*s), gx, gy, w, bpr;
+         const uint8_t *gd;
+@@ -167,6 +178,15 @@ static int32_t cv_text(int32_t x, int32_t y, const felucca_font_t *f, const char
+                 a = (gx & 1u) ? (a & 15u) : (a >> 4);
+                 if (!a || (uint32_t)px >= cv_w || py < cv_y0 || py >= cv_y1)
+                     continue;
++#ifdef MIXED_RENDERING
++                if (a != 15u) {              /* lighter ink on a darker pixel: correct the fringe */
++                    uint32_t bg = swap16(cv_px[(uint32_t)py * cv_w + (uint32_t)px]);
++                    if (fi >= ((bg >> 11) & 31u) * 2u + ((bg >> 5) & 63u) * 3u + (bg & 31u))
++                        a = CV_ALPHA_UP[a];
++                    if (!a)
++                        continue;
++                }
++#endif
+                 if (a == 15u) {
+                     cv_px[(uint32_t)py * cv_w + (uint32_t)px] = swap16(c);
+                 } else {
+diff --git a/tools/build.py b/tools/build.py
+index 39969b2..2f71caa 100755
+--- a/tools/build.py
++++ b/tools/build.py
+@@ -753,9 +753,13 @@ def build_id():
+ 
+ 
+ def opt_flags():
+-    """the optional parts an fm1.toml turns on that need no SDK: the same on the device, the host and the web"""
+-    return [f"-D{flag}=1" for key, flag in (("mirror", "FM1B_MIRROR"), ("backup", "FM1B_BACKUP"), ("cpu2", "FM1B_CPU2"))
+-            if (CONF.get(key) and os.environ.get(flag) != "0") or os.environ.get(flag) == "1"]   # (FM1B_MIRROR=1: a build with it, fm1.toml as it is; FM1B_BACKUP=0: without)
++    """the optional parts an fm1.toml turns on that need no SDK: the same on the device, the host and the web;
++    MIXED_RENDERING=1: the linear-light text blend (device/gfx.c), not the default sRGB one"""
++    flags = [f"-D{flag}=1" for key, flag in (("mirror", "FM1B_MIRROR"), ("backup", "FM1B_BACKUP"), ("cpu2", "FM1B_CPU2"))
++             if (CONF.get(key) and os.environ.get(flag) != "0") or os.environ.get(flag) == "1"]   # (FM1B_MIRROR=1: a build with it, fm1.toml as it is; FM1B_BACKUP=0: without)
++    if os.environ.get("MIXED_RENDERING") == "1":
++        flags.append("-DMIXED_RENDERING=1")
++    return flags
+ 
+ 
+ def build_host():

@@ -125,6 +125,34 @@ if ! git -C "$CLONES/zen-1" cat-file -e "$ZEN1_INSTALL_UPSTREAM^{commit}" 2>/dev
     git -C "$CLONES/zen-1" fetch --quiet fomni "$ZEN1_INSTALL_UPSTREAM" 2>/dev/null || true
 fi
 
+# ----------------------------------------------------------------- fonts ---
+# DejaVu Sans is not in the pinned clones: LOOM-8's mixed set (patches/fm1-loom/03-mixed-fonts)
+# reads it through X0X_FONT_DIRS, which scripts/lib/common.sh points here. The release tarball is
+# pinned by SHA-256 and kept in .cache/ (re-runnable; the extraction is skipped once it is there).
+FONTS="$ROOT/assets/fonts"
+if [ ! -f "$FONTS/DejaVuSans.ttf" ]; then
+    mkdir -p "$FONTS" "$ROOT/.cache"
+    archive="$ROOT/.cache/$DEJAVU_ARCHIVE"
+    if [ ! -f "$archive" ]; then
+        say "download $DEJAVU_ARCHIVE"
+        curl -fsSL "$DEJAVU_URL" -o "$archive" || { say "ERROR: cannot fetch $DEJAVU_URL"; exit 1; }
+    fi
+    got=$(sha256_of "$archive")
+    if [ "$got" != "$DEJAVU_SHA256" ]; then
+        say "ERROR: $DEJAVU_ARCHIVE has SHA-256 $got; revisions.env pins $DEJAVU_SHA256"
+        exit 1
+    fi
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm1-fonts.XXXXXX")
+    tar xjf "$archive" -C "$tmp" "$DEJAVU_DIR/ttf/DejaVuSans.ttf" "$DEJAVU_DIR/LICENSE" || {
+        rm -rf "$tmp"; say "ERROR: cannot unpack $DEJAVU_ARCHIVE (tar bzip2?)"; exit 1; }
+    mv "$tmp/$DEJAVU_DIR/ttf/DejaVuSans.ttf" "$FONTS/DejaVuSans.ttf"
+    mv "$tmp/$DEJAVU_DIR/LICENSE" "$FONTS/DejaVu-LICENSE.txt"
+    rm -rf "$tmp"
+    say "fonts    assets/fonts/DejaVuSans.ttf"
+else
+    say "exists   assets/fonts/DejaVuSans.ttf"
+fi
+
 # --------------------------------------------------------------- patches ---
 # patches/<repo>/<NN-problem>/NNNN-*.patch, problem dirs in sorted order (the numeric prefix is
 # what makes the order deterministic when two patches touch the same file).
@@ -174,7 +202,7 @@ if [ ! -x "$ROOT/.venv/bin/python" ]; then
 fi
 "$ROOT/.venv/bin/pip" install --quiet --disable-pip-version-check \
     "mido==$PY_MIDO_VERSION" "python-rtmidi==$PY_RTMIDI_VERSION" "fonttools==$PY_FONTTOOLS_VERSION" \
-    "numpy==$PY_NUMPY_VERSION" "scipy==$PY_SCIPY_VERSION"
+    "numpy==$PY_NUMPY_VERSION" "scipy==$PY_SCIPY_VERSION" "freetype-py==$PY_FREETYPE_VERSION"
 if ! "$ROOT/.venv/bin/python" -c 'import PIL.features as f,sys; sys.exit(0 if f.check("raqm") else 1)' 2>/dev/null; then
     say "warning: Pillow without libraqm in the venv; the fonts need it (brew install pillow)"
 fi

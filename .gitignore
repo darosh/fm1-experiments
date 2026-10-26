@@ -5,6 +5,10 @@ clones/
 .venv/
 .logs/
 
+# shared assets fetched by scripts/setup.sh (fonts/DejaVuSans.ttf) and its download cache
+assets/fonts/
+.cache/
+
 # editor
 .idea/
 .DS_Store

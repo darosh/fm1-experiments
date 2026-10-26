@@ -1,0 +1,61 @@
+From 64b8ed11bc4c3a605dbc764ef246af0a89d4cb20 Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Mon, 26 Oct 2026 09:12:41 +0100
+Subject: [PATCH] gfx_loom.c: the MIXED text blend, behind MIXED_RENDERING=1
+
+Same change as fm1-base's gfx.c: partial coverage is remapped for linear light
+only where the ink is lighter than the pixel behind it, so light-on-dark text
+loses the dark fringe beside its stems; dark-on-light keeps the sRGB blend,
+which is the better stem darkening there.
+
+MIXED_RENDERING=1 selects it at build time (fm1-base's build.py forwards the
+-D); without it LOOM-8 renders as upstream does.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ app/gfx_loom.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/app/gfx_loom.c b/app/gfx_loom.c
+index 4b75855..e42cb20 100644
+--- a/app/gfx_loom.c
++++ b/app/gfx_loom.c
+@@ -217,11 +217,22 @@ static uint32_t loom_glyph(const loom_font_t *f, uint32_t ch)
+     return ch - f->first;
+ }
+ 
++#ifdef MIXED_RENDERING
++/* partial coverage, remapped for linear light when the ink is lighter than what is behind it (the
++ * sRGB-space blend below draws a 20 % edge at 30/255 instead of 70/255, a black gap beside the
++ * stem on the FM-1's panel); dark ink on a light box keeps the raw coverage, where that darker
++ * fringe is the stem darkening the eye expects (2026-10) */
++static const uint8_t LOOM_ALPHA_UP[16] = {0, 4, 5, 7, 8, 9, 9, 10, 11, 11, 12, 13, 13, 14, 15, 15};
++#endif
++
+ /* text in colour c, each pixel's coverage blended over what is already on the canvas (an
+  * anti-aliased face on a coloured box gets no dark fringe); returns the end x */
+ static int32_t loom_text(int32_t x, int32_t y, const loom_font_t *f, const char *s, uint16_t c)
+ {
+     uint32_t r = c >> 11, g = (c >> 5) & 63u, b = c & 31u;
++#ifdef MIXED_RENDERING
++    uint32_t fi = r * 2u + g * 3u + b;
++#endif
+ #ifdef GFX_AUDIT
+     const char *s0 = s;
+     int32_t ix0 = 1 << 20, iy0 = 1 << 20, ix1 = -(1 << 20), iy1 = -(1 << 20), clip = 0, shown = 0;
+@@ -259,6 +270,15 @@ static int32_t loom_text(int32_t x, int32_t y, const loom_font_t *f, const char
+ #endif
+                 if (!a || (uint32_t)px >= cv_w || py < cv_y0 || py >= cv_y1)
+                     continue;
++#ifdef MIXED_RENDERING
++                if (a != 15u) {              /* lighter ink on a darker pixel: correct the fringe */
++                    uint32_t bg = swap16(cv_px[(uint32_t)py * cv_w + (uint32_t)px]);
++                    if (fi >= ((bg >> 11) & 31u) * 2u + ((bg >> 5) & 63u) * 3u + (bg & 31u))
++                        a = LOOM_ALPHA_UP[a];
++                    if (!a)
++                        continue;
++                }
++#endif
+                 if (a == 15u) {
+                     cv_px[(uint32_t)py * cv_w + (uint32_t)px] = swap16(c);
+                 } else {

@@ -65,7 +65,7 @@ iPadOS. Nothing here is pushed upstream.
 | Rosetta (Apple silicon) | the build container is `linux/amd64` | `softwareupdate --install-rosetta --agree-to-license` |
 | JieLi toolchain | `clang` for `pi32v2` | after the first `setup.sh`: `clones/fm1-base/tools/get_toolchain.sh` (installs `~/.jieli/toolchain`; the pinned package is `jieli-linux-toolchains-20260730.1`) |
 | AC79 SDK | SPL, `cfg_tool.bin`, EQ table for packaging | see below |
-| Python with Pillow+raqm, fontTools, numpy, scipy | fonts, screen-reader words; Felucca, TONITOR, SLOOP, Melodee and Mutable Dreams rasterise their UI font at build time; ZEN-1's reference-analysis selftest uses numpy/scipy | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools, numpy and scipy |
+| Python with Pillow+raqm, fontTools, numpy, scipy, freetype-py | fonts, screen-reader words; Felucca, TONITOR, SLOOP, Melodee and Mutable Dreams rasterise their UI font at build time; ZEN-1's reference-analysis selftest uses numpy/scipy; Font Rendering's hinted sets use freetype-py | `brew install python@3.15 pillow` (the venv is built from Homebrew python3.15 with `--system-site-packages`); `setup.sh` adds fontTools, numpy, scipy and freetype-py |
 
 The SDK is ~1.4 GB and is **not** cloned into this repo:
 
@@ -108,6 +108,14 @@ Build; writes `clones/fm1-loom/app/build/loom.fwsc`:
 
 ```sh
 ./scripts/build-loom.sh
+```
+
+The text blend is a build-time choice: `MIXED_RENDERING=1` selects the linear-light "MIXED"
+blend (light ink is corrected for the panel's sRGB gamma) instead of the default sRGB one. It
+applies to the device, host and web builds, so the two can be compared from one checkout:
+
+```sh
+MIXED_RENDERING=1 ./scripts/build-loom.sh
 ```
 
 Host tests (run a build first):
@@ -549,7 +557,11 @@ patches/
   fm1-base/02-sdk-v1.2.14/          build.py: the SDK hashes of the installed V1.2.14
   fm1-base/03-symlinked-bsp/        build.py: the source root covers a symlinked bsp
   fm1-base/04-esm-modules/          package.json: the web/ modules are ESM
+  fm1-base/05-mixed-text-blend/     gfx.c: the MIXED coverage blend, behind MIXED_RENDERING=1 (build.py
+                                    forwards it)
+  fm1-base/07-stale-builder/        build.py: replace a toolchain container whose mount went stale
   fm1-loom/01-usb-host-compat/      LOOM-8's USB names and its descriptor flags
+  fm1-loom/02-mixed-text-blend/     gfx_loom.c: the same MIXED blend, behind MIXED_RENDERING=1
   fm1-amb/01-usb-host-compat/       AMB-1's: the same descriptor set, and its USB names
   felucca/01-usb-host-compat/       usb.c: MIDI behind the streams, the audio IAD, a serial; descriptor test
   felucca/02-sdk-v1.2.14/           build.py: the SDK hashes of the installed V1.2.14
@@ -584,6 +596,15 @@ patches/
   descriptor set.
 - `setup.sh` skips a patch whose reverse applies cleanly (already applied), applies it if it
   applies cleanly, and stops with the patch name if neither is true.
+- The two `mixed-text-blend` patches are build-time options, not the default: with
+  `MIXED_RENDERING=1` in the environment, `build.py` adds `-DMIXED_RENDERING=1` for the device,
+  the host and the web, and the partial-coverage blend remaps light ink on a darker pixel for
+  linear light. Without it the blend is the platform's sRGB one, exactly as upstream. Dark ink on
+  a light box keeps the raw coverage in both (the stem-darkening direction that reads better on
+  the panel).
+- `setup.sh` fetches DejaVu Sans into `assets/fonts/` (release tarball pinned by SHA-256 in
+  `revisions.env`); no current patch reads it.
+
 - `patches/mutable-dreams` applies to the extracted `src/` tree, so its paths carry that prefix;
   the archive commit is what its `index` lines resolve against.
 
