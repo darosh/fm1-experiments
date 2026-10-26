@@ -925,10 +925,9 @@ open, and resumes when the list closes (the held step and EDIT are untouched).
 
 Repro on the FM-1:
 1. Steps page, a track with a note on a step.
-2. Hold that step's key; press and hold EDIT. The lock editor's knobs show pitch/length/punch/tone.
+2. Hold that step's key; press EDIT. The lock editor's knobs show pitch/length/punch/tone.
 3. Tap SEL. The step's menu appears; the footer says SELECT move.
 4. Turn SELECT. Nothing moves.
-5. Let go of EDIT and step, hold the step again, tap SEL without EDIT: SELECT moves the same menu.
 
 Regression: `tests/scenarios/heldsteplist.xy` opens the list over the lock editor, turns SELECT
 down to CLEAR LOCKS, picks it, and checks the step's note is still there (the unfixed build stays
