@@ -586,6 +586,9 @@ patches/
   fm1-loom/04-model-change-fade/    braids.h: a model turned mid-note, behind MODEL_CHANGE_FADE
                                     (0 reset, 1 fade through, 2 latch); the click measured in
                                     tests/host/braids_test.c, run once per mode
+  fm1-loom/05-step-sel-list/        ui.c: SELECT moves a held step's SEL list (the lock editor no
+                                    longer keeps it), and letting the step go closes the list
+                                    instead of switching it to the pattern's (§7, bugs 4-5)
   fm1-amb/01-usb-host-compat/       AMB-1's: the same descriptor set, and its USB names
   felucca/01-usb-host-compat/       usb.c: MIDI behind the streams, the audio IAD, a serial; descriptor test
   felucca/02-sdk-v1.2.14/           build.py: the SDK hashes of the installed V1.2.14
@@ -902,6 +905,56 @@ sample and only while it is in flight.
 Mode 1 is the one that keeps automation live; mode 2 is the conservative reading (the model knob
 behaves like `TP_ENGINE`, which only takes effect on the next note). Neither is wired in by
 default: the flag is there to compare them on the FM-1.
+
+### Bug 4 — SELECT does not move a held step's SEL list
+
+Seen on LOOM-8 v0.8.1. On Steps, hold a step's key and press EDIT (the lock editor: the knobs
+show that step's locks), then tap SEL. The step's list opens (`REMOVE <note>`, `COPY STEP`,
+`CLEAR LOCKS`) and its footer offers **SELECT move** — but turning SELECT does nothing, the
+highlight stays on the first row. ALGORITHM still changes a row's value and SEL still runs the row
+under the highlight, so only the choice of row is stuck. The same list opened without EDIT held
+scrolls normally, which is why this reads as "the SELECT knob is dead in this menu".
+
+Cause: `input()` in `app/ui.c` takes every SELECT turn for the lock editor's own page cycle
+(`ui.lockpg`, the held step's EDIT/ENV/FX/LFO pages) and consumes the event before the list
+branch is reached; `list_move()` (`lst.open`) never sees it. The lock editor and the list can be
+open at once, and the list did not take precedence.
+
+Fix: `patches/fm1-loom/05-step-sel-list`, first commit — the page cycle yields while a list is
+open, and resumes when the list closes (the held step and EDIT are untouched).
+
+Repro on the FM-1:
+1. Steps page, a track with a note on a step.
+2. Hold that step's key; press and hold EDIT. The lock editor's knobs show pitch/length/punch/tone.
+3. Tap SEL. The step's menu appears; the footer says SELECT move.
+4. Turn SELECT. Nothing moves.
+5. Let go of EDIT and step, hold the step again, tap SEL without EDIT: SELECT moves the same menu.
+
+Regression: `tests/scenarios/heldsteplist.xy` opens the list over the lock editor, turns SELECT
+down to CLEAR LOCKS, picks it, and checks the step's note is still there (the unfixed build stays
+on REMOVE and deletes the note).
+
+### Bug 5 — releasing the held step turns its SEL list into the pattern's
+
+Seen on LOOM-8 v0.8.1. On Steps, hold a step and tap SEL: its list opens. Let the step key go
+without picking a row: instead of going back to the Steps page, the menu is rebuilt as the
+pattern's own Steps list (`PATTERN`, `LENGTH`, `SCALE`, `GROOVE`, `QUANT`, `NOTE`, `SHAPE`,
+`CLEAR NOTES`, …) and the selection resets to its first row. The step's actions disappear, and
+what was meant to dismiss the menu can now run a pattern-level action.
+
+Cause: the list keeps no state of its own — `list_build()` decides its rows from `ui.held` on
+every draw. Releasing the last held step cleared `ui.held`, `ui.lockpg` and `ui.trickpg` but left
+`lst.open` set, so the next repaint built the pattern list.
+
+Fix: the second commit of the same patch — the last step's release closes the list (with more
+steps still held the list stays, on the one left, as before).
+
+Repro on the FM-1:
+1. Steps page, hold a step's key and tap SEL. The step's menu opens.
+2. Let go of the step key. The menu changes to PATTERN / LENGTH / SCALE / … instead of closing.
+
+Regression: `tests/scenarios/heldsteplist.xy` (after the step is let go, SELECT must turn the
+Steps page to Bar; the unfixed build keeps the leftover list and scrolls it instead).
 
 ### SDK and the boot area
 

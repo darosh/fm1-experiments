@@ -1,0 +1,62 @@
+From 384418e9f95c5d90c57ba51da70186477977ff7b Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Mon, 26 Oct 2026 17:35:08 +0100
+Subject: [PATCH 5/5] ui.c: letting go of a held step closes its SEL list
+
+The held step's SEL list is not a mode of its own: list_build rebuilds
+it from ui.held on every draw. Releasing the step cleared ui.held,
+lockpg and trickpg but left lst.open set, so the next repaint turned the
+step's menu into the Steps page's pattern list (PATTERN, LENGTH, SCALE,
+...) instead of going back to the page.
+
+The last held step's release now closes the list (with more steps still
+held it stays, on the one left, as before).
+
+tests/scenarios/heldsteplist.xy: once the step is let go, SELECT turns
+the Steps page to Bar instead of scrolling the stale list.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ app/ui.c                        |  5 +++--
+ tests/scenarios/heldsteplist.xy | 11 +++++++++++
+ 2 files changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/app/ui.c b/app/ui.c
+index 46ed727..a6d5fee 100644
+--- a/app/ui.c
++++ b/app/ui.c
+@@ -1606,9 +1606,10 @@ static void key_up(int k)
+         if (!ui.held_used && plat_ms() - ui.key_t[k] < STEP_TAP_MS)
+             step_toggle(w);                      /* a tap; a longer hold only looked at the step */
+         ui.held &= (uint16_t)~(1u << w);
+-        if (!ui.held)                            /* (chord mode stays on past the step's own release) */
++        if (!ui.held) {                          /* (chord mode stays on past the step's own release) */
+             ui.lockpg = ui.trickpg = 0;
+-        else
++            lst.open = 0;                        /* its SEL list is the held step's: let go, and it goes */
++        } else
+             for (int i = 0; i < 16; i++)
+                 if (ui.held >> i & 1u) {
+                     ui.held_first = (uint8_t)i;
+diff --git a/tests/scenarios/heldsteplist.xy b/tests/scenarios/heldsteplist.xy
+index d21a896..0c806af 100644
+--- a/tests/scenarios/heldsteplist.xy
++++ b/tests/scenarios/heldsteplist.xy
+@@ -18,3 +18,14 @@ wait 60
+ expect note 2 1 1 60
+ release EDIT
+ key w0 up
++# letting the step go closes its list: back on Steps (SELECT turns its page, not the list's rows)
++wait 60
++key w1 down
++wait 60
++tap SEL
++wait 60
++key w1 up
++wait 60
++spin SELECT 1
++wait 60
++expect page Bar
+-- 
+2.55.0
+

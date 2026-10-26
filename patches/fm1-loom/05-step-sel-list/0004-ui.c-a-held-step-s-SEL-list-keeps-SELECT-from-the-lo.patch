@@ -1,0 +1,71 @@
+From f3122683738aedea68aaf9fadc8de7047ba9ab02 Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Mon, 26 Oct 2026 17:35:00 +0100
+Subject: [PATCH 4/5] ui.c: a held step's SEL list keeps SELECT from the lock
+ editor
+
+A step held and EDIT pressed opens the lock editor (ui.lockpg); SEL then
+opens the step's list (REMOVE <note>, COPY STEP, CLEAR LOCKS). Every
+SELECT turn was still taken by the lock editor's page cycle before the
+list saw it, so the highlight never moved: the footer offers SELECT move
+and nothing happens. ALGORITHM (list_change) and SEL (list_sel) kept
+working, which is why only the move broke.
+
+A list open over the lock editor now keeps SELECT for its rows; the
+lock editor's page cycle resumes once the list closes (the held step and
+EDIT are untouched, as they were).
+
+tests/scenarios/heldsteplist.xy: the list opened over the lock editor,
+SELECT down to CLEAR LOCKS, SEL picks it, the step's note stays (the
+unfixed build picks REMOVE instead and the note is gone).
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ app/ui.c                        |  3 ++-
+ tests/scenarios/heldsteplist.xy | 20 ++++++++++++++++++++
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+ create mode 100644 tests/scenarios/heldsteplist.xy
+
+diff --git a/app/ui.c b/app/ui.c
+index 17c8ff4..46ed727 100644
+--- a/app/ui.c
++++ b/app/ui.c
+@@ -3305,7 +3305,8 @@ static void input(void)
+         ui.act_t = plat_ms();
+     if (ui.ask)
+         return;
+-    if ((e = ev[EN_SELECT]) != 0 && ui.lockpg) {  /* the lock editor: the module's other pages (the track's own) */
++    if ((e = ev[EN_SELECT]) != 0 && ui.lockpg && !lst.open) {   /* the lock editor: the module's other pages (the
++                                                  * track's own); a list open over it keeps SELECT for its rows */
+         int g = page_group(ui.lockpg - 1), f = PAGE_BTN[g].first, n = group_n(g), pg = ui.lockpg - 1 - f;
+         if (PAGE_BTN[g].btn == B_FX) {           /* the track's own: Character and Sends */
+             f = P_CHARACTER;
+diff --git a/tests/scenarios/heldsteplist.xy b/tests/scenarios/heldsteplist.xy
+new file mode 100644
+index 0000000..d21a896
+--- /dev/null
++++ b/tests/scenarios/heldsteplist.xy
+@@ -0,0 +1,20 @@
++# A held step's SEL list, opened over the lock editor (step held + EDIT): SELECT moves its rows (not the lock
++# editor's pages), and SEL runs the row picked. With CLEAR LOCKS picked, the step's note stays.
++wait 300
++turn ALGO 1
++expect trk 2
++tap SEQ
++step 2 1 1 60 100
++key w0 down
++wait 60
++press EDIT
++wait 60
++tap SEL
++wait 60
++spin SELECT 2
++wait 60
++tap SEL
++wait 60
++expect note 2 1 1 60
++release EDIT
++key w0 up
+-- 
+2.55.0
+
