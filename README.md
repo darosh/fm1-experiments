@@ -118,6 +118,15 @@ applies to the device, host and web builds, so the two can be compared from one 
 MIXED_RENDERING=1 ./scripts/build-loom.sh
 ```
 
+A model turned mid-note (cane and voile) is a build-time choice too: `MODEL_CHANGE_FADE` is what
+an automated model knob does while a note sounds — unset or `0` resets the model at once (upstream,
+which clicks), `1` fades the voice through the change, `2` keeps the note's model until the next
+note. Same three builds, one variable (§7, "A model turned mid-note"):
+
+```sh
+MODEL_CHANGE_FADE=1 ./scripts/build-loom.sh
+```
+
 Host tests (run a build first):
 
 ```sh
@@ -570,8 +579,13 @@ patches/
   fm1-base/07-stale-builder/        build.py: replace a toolchain container whose mount went stale
   fm1-base/08-ble-timer-shim/       ble/shim: usr_timeout_del, which V1.2.14's btctrler.a wants in a
                                     Bluetooth-only build
+  fm1-base/09-model-change-fade/    build.py: forward MODEL_CHANGE_FADE, and give the host's and the
+                                    web's o2 units opt_flags() (dsp/synth.c is an o2 unit)
   fm1-loom/01-usb-host-compat/      LOOM-8's USB names and its descriptor flags
   fm1-loom/02-mixed-text-blend/     gfx_loom.c: the same MIXED blend, behind MIXED_RENDERING=1
+  fm1-loom/04-model-change-fade/    braids.h: a model turned mid-note, behind MODEL_CHANGE_FADE
+                                    (0 reset, 1 fade through, 2 latch); the click measured in
+                                    tests/host/braids_test.c, run once per mode
   fm1-amb/01-usb-host-compat/       AMB-1's: the same descriptor set, and its USB names
   felucca/01-usb-host-compat/       usb.c: MIDI behind the streams, the audio IAD, a serial; descriptor test
   felucca/02-sdk-v1.2.14/           build.py: the SDK hashes of the installed V1.2.14
@@ -847,6 +861,47 @@ Linux naming is **not** a descriptor bug: `lsusb -v` shows `iProduct "FM-1 LOOM-
 prefers the usb.ids entry for `1209:0001`. The real fix is a non-test PID from
 [pid.codes](https://pid.codes/) — the bsp's own comment says the current one "must be replaced
 before any release".
+
+### Bug 3 — automating the model knob on cane (or voile) clicks
+
+`model` is `TP_E1`, and for cane and voile it is a discrete selector that is deliberately left out
+of the glide (`E_GLIDE` is `0xE` for both, so bit 0 steps at a 64-sample chunk boundary). The
+model's entire state *is* the voice: a waveguide line for pluck, bow, reed and flute, the partials
+or formants for bell, drum, vowel, choir and whisper. `cn_prep` / `vo_prep` compare the model with
+the one the state was made for and reset it when they differ — `cn_clear` zeroes the
+1536-sample slot and `o[1..15]`, then `cn_chunk` strikes; `vo_init` zeroes the formants. So the
+change steps the output from the old model's sample (measured: 0.25 where the bell's own largest
+step is 0.13) straight to zero, and the new model starts from rest. The manual's "the pluck and
+the strikes play once on each note" is the same reset, but a *held* note should not restart.
+
+Nothing is wrong with the automation path itself; the defect is that a discrete selector wipes a
+sounding voice. It is reachable three ways, all of which were checked:
+
+- a parameter lock on the step (`lock_knob` → a lane → `apply_locks`/`lock_put` → `synth_lock`),
+- recorded motion (the same lane, written by `seq_rec_knob`),
+- the track LFO with destination `synth` and parameter `model` (`LD_TP[LD_SYNTH][0] = TP_E1`),
+  which sweeps the model every chunk; with `SHAPE` a lock ramp steps it too.
+
+`MODEL_CHANGE_FADE` selects the treatment (`patches/fm1-base/09-model-change-fade` forwards it to
+the device, host and web, as `MIXED_RENDERING` is; `patches/fm1-loom/04-model-change-fade` is the
+engine). Unset or `0` is upstream, byte-for-byte: the image is 526180 B and the click is there.
+
+| `MODEL_CHANGE_FADE` | what a change during a note does | steps a sample across it (cane / voile) | image |
+|---|---|---|---|
+| `0` (default) | resets the voice at once — the click | 0.25 / 0.34 (their own waveforms: 0.13 / 0.11) | 526180 B |
+| `1` | fades the voice out over 3 ms, switches at zero, back in over 3 ms | 0.04 / 0.11 | 526776 B |
+| `2` | the note keeps its model; the lock reaches the next note | 0.02 / 0.008, and bit-identical to no change at all | 526536 B |
+
+Measured by `tests/host/braids_test.c` (a droning bell / whisper changed at eight successive
+blocks, each compared with the models' own largest step; the suite runs once per mode). RAM and
+the pool are unchanged in every mode — the fade lives in three floats of the engine's derived-value
+array that cane and voile do not otherwise use, not in `voice_t`. `dsp_hash`'s 623 cases are
+identical in all three modes, so mode 1 changes no existing sound; the fade costs one multiply a
+sample and only while it is in flight.
+
+Mode 1 is the one that keeps automation live; mode 2 is the conservative reading (the model knob
+behaves like `TP_ENGINE`, which only takes effect on the next note). Neither is wired in by
+default: the flag is there to compare them on the FM-1.
 
 ### SDK and the boot area
 

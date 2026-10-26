@@ -1,0 +1,433 @@
+From 3eb5ba8e21783255d14c338fefde98a4460572be Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Mon, 26 Oct 2026 15:27:20 +0100
+Subject: [PATCH 3/3] braids.h: a model turned mid-note, and the click it makes
+ (MODEL_CHANGE_FADE)
+
+Automating the model knob (TP_E1) on a cane or voile track makes the voice click whenever the
+value lands on a different model. The model's whole state is the voice's own: a waveguide line
+for pluck, bow, reed and flute, the partials or formants for bell, drum, vowel, choir and
+whisper. cn_prep and vo_prep compare the model with the one the state is for and reset it when
+they differ: cn_clear zeroes the 1536-sample slot and o[1..15], cn_chunk then strikes, vo_init
+zeroes the formants. The output therefore steps from the sounding model's sample to silence
+(measured at the change: 0.25 where the bell's own largest step is 0.13, and 0.34 against
+whisper's 0.11) before the new model starts from rest. A lock per step re-strikes the note; the
+LFO on the engine's first knob, or a lock ramp with SHAPE, does it every couple of chunks.
+
+MODEL_CHANGE_FADE selects what the change does (fm1-base's tools/build.py forwards it; unset,
+0, is upstream's):
+
+  0  the reset at once, the click above.
+  1  the old model fades out over 3 ms, the switch happens at zero, and the new one fades in
+     over 3 ms, so automation stays live across the change at the cost of a short dip in that
+     voice. The gain is applied per sample in cn_run/vo_run, and only while a fade is in
+     flight: a voice's steady-state cost is unchanged (braids_test's cost table and dsp_hash's
+     623 cases are identical in every mode). A new note still takes its model at once, a fade
+     is dropped when the note or the voice ends (cn_init/vo_init/cn_strike), and a lock that
+     returns to the sounding model during the fade cancels the switch instead of re-striking.
+  2  the note keeps the model it began on; the lock's value reaches the next note, which is
+     what TP_ENGINE already does. The render is bit-for-bit the render with no change at all.
+
+The fade's state lives in ex[20..22], which cane and voile do not use (synth_t has 112 bytes
+spare of 12288 and must not grow): 20 the gain, 21 the phase and the model it is heading for,
+22 the step a sample.
+
+tests/host/braids_test.c measures the click instead of only bounding it: a droning bell (cane)
+and whisper (voile) change model at eight successive blocks, and the largest step across the
+change is compared with each model's own largest step, so there is no machine-specific
+threshold. braids_test.sh runs the suite once per mode. Flash: 0 526180 B, 1 526776 B (+596),
+2 526536 B (+356); RAM and pool unchanged.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ app/dsp/braids.h          | 122 ++++++++++++++++++++++++++++++++++++--
+ tests/host/braids_test.c  | 112 +++++++++++++++++++++++++++++++++-
+ tests/host/braids_test.sh |  17 ++++--
+ 3 files changed, 238 insertions(+), 13 deletions(-)
+
+diff --git a/app/dsp/braids.h b/app/dsp/braids.h
+index e409ea7..f824178 100644
+--- a/app/dsp/braids.h
++++ b/app/dsp/braids.h
+@@ -63,6 +63,29 @@
+  *   - whisper: the buzz under the noise is LOOM-8's (breath, 127 = Braids' TWNQ);
+  *   - Braids' parameter interpolation and its sync input are not here (LOOM-8's knobs move once a chunk). */
+ 
++/* a model turned while a note sounds (an automated model knob: a step's lock, recorded motion, the LFO on
++ * the engine's first knob, or a lock ramp with SHAPE): the model's whole state is its waveguide or its
++ * partials, and there is no second slot to crossfade with, so changing it can only reset the voice. What
++ * the reset must not do is step the output from the old model's sample to silence: that is a click.
++ * MODEL_CHANGE_FADE selects the treatment (the build: fm1-base's tools/build.py forwards it; the default,
++ * 0, is upstream's):
++ *   0  the reset at once (a step in the output, the click this was found for)
++ *   1  the old model fades out over MODEL_FADE_MS, the new one starts, and fades in again: automation stays
++ *      live across the change, at the cost of a short dip in that voice
++ *   2  the note keeps the model it began on; the lock's value reaches the next note (as TP_ENGINE does) */
++#ifndef MODEL_CHANGE_FADE
++#define MODEL_CHANGE_FADE 0
++#endif
++#define MODEL_FADE_MS 3.0f               /* each half of the fade: 1 */
++#define MODEL_FADE_STEP (1000.0f / (MODEL_FADE_MS * SY_SR))
++/* cane and voile keep the fade in ex[20..22] (cane uses ex[0..19]): 20 the gain (1 = none), 21 the phase
++ * and the model it is heading for (0 idle, 1 + 2m fading out, 2 + 2m fading in), 22 the step a sample */
++#define MF_GAIN 20
++#define MF_PHASE 21
++#define MF_STEP 22
++/* a model change on a voice that is already sounding its own (not a note beginning, not one being taken) */
++#define MF_MIDNOTE(v) ((v)->o[0] > 0.0f && !(v)->fresh && (v)->amp.stage != ENV_OFF && (v)->steal_phase == 0)
++
+ /* ------------------------------------------------------------- cane ---- */
+ enum { CN_PLUCK, CN_BOW, CN_REED, CN_FLUTE, CN_BELL, CN_DRUM };
+ #define CN_NECK 1216                     /* bow: bow to nut; bow to bridge after it (CN_LEN - CN_NECK) */
+@@ -172,13 +195,22 @@ static void cn_init(voice_t *v)
+     v->o[0] = 0.0f;
+     cn_clear(v);
+     v->o[11] = -1.0f;
++#if MODEL_CHANGE_FADE
++    v->c.ex[MF_GAIN] = 1.0f;                    /* (a voice taken for a new note: no fade of its own) */
++    v->c.ex[MF_PHASE] = 0.0f;
++#endif
+ }
+ /* a note: a strike to make at the next chunk; clear = a new note on the voice (the waveguides start from rest,
+  * as Braids' do), else a mono retrigger (the bow and the breath start again on the lines as they are) */
+ static void cn_strike(voice_t *v, int clear)
+ {
+-    if (clear)
++    if (clear) {
+         v->o[0] = 0.0f;                          /* the next prep clears the slot */
++#if MODEL_CHANGE_FADE == 1
++        v->c.ex[MF_GAIN] = 1.0f;                /* (a new note: a fade left over from the last one ends) */
++        v->c.ex[MF_PHASE] = 0.0f;
++#endif
++    }
+     v->o[11] = -1.0f;
+ }
+ static void cn_prep(voice_t *v)
+@@ -187,6 +219,20 @@ static void cn_prep(voice_t *v)
+     int m = cn_model(c->ek[0]);
+     float f = fm_clampf(c->freq, 16.0f, 9000.0f), tb = c->e[1], co = c->e[2], dp = c->e[3];
+     c->stereo = 0;
++#if MODEL_CHANGE_FADE
++    if ((int)v->o[0] != m + 1 && MF_MIDNOTE(v)) {
++#if MODEL_CHANGE_FADE == 2
++        m = (int)v->o[0] - 1;                    /* the note keeps the model it began on (the lock waits) */
++#else
++        if (c->ex[MF_PHASE] == 0.0f) {          /* a model turned mid-note: the old one fades out first */
++            c->ex[MF_GAIN] = 1.0f;
++            c->ex[MF_STEP] = MODEL_FADE_STEP;
++        }
++        c->ex[MF_PHASE] = (float)(1 + 2 * m);   /* (still, or fading out: the latest model wins) */
++        return;                                  /* the running model's values (ex[]) stand */
++#endif
++    }
++#endif
+     c->ex[19] = (float)m;
+     if ((int)v->o[0] != m + 1) {                 /* a new model (or a new note): its state from rest */
+         cn_clear(v);
+@@ -307,8 +353,25 @@ static void cn_prep(voice_t *v)
+ static void cn_chunk(voice_t *v)
+ {
+     cfg_t *c = &v->c;
+-    int m = (int)c->ex[19], i;
+-    float *pt = v->tws < CN_SLOTS ? cn_mem[v->tws].f : 0;
++    int m, i;
++    float *pt;
++#if MODEL_CHANGE_FADE == 1
++    if (c->ex[MF_PHASE] != 0.0f) {              /* a model turned mid-note (cn_prep): its fade */
++        if (((int)c->ex[MF_PHASE] & 1) && c->ex[MF_GAIN] <= 0.0f) {   /* faded out: the switch, in silence */
++            int old = (int)v->o[0] - 1, want = cn_model(c->ek[0]);
++            if (want != old) {                   /* (the lock may have come back: then no switch at all) */
++                v->o[0] = 0.0f;                  /* cn_prep clears the state and strikes the new model */
++                cn_prep(v);
++            }
++            c->ex[MF_GAIN] = 0.0f;              /* (it rises from here: cn_run's ramp) */
++            c->ex[MF_PHASE] = (float)(2 + 2 * (int)c->ex[19]);
++        } else if (!((int)c->ex[MF_PHASE] & 1) && c->ex[MF_GAIN] >= 1.0f) {
++            c->ex[MF_PHASE] = 0.0f;             /* the fade in is done: no fade at all */
++        }
++    }
++#endif
++    m = (int)c->ex[19];
++    pt = v->tws < CN_SLOTS ? cn_mem[v->tws].f : 0;
+     if (!pt || (int)v->o[0] != m + 1)
+         return;
+     if (v->o[11] < 0.0f) {                       /* the strike */
+@@ -638,6 +701,14 @@ static void cn_run(voice_t *v, float *xl, float *xr, int m)
+     case CN_BELL: cn_bell(v, cn_mem[v->tws].f, xl, m, g); break;
+     default: cn_drum(v, cn_mem[v->tws].f, xl, m, g); break;
+     }
++#if MODEL_CHANGE_FADE == 1
++    if (v->c.ex[MF_PHASE] != 0.0f) {            /* a model turned mid-note: the output ramps (cn_chunk) */
++        float fg = v->c.ex[MF_GAIN], st = (int)v->c.ex[MF_PHASE] & 1 ? -v->c.ex[MF_STEP] : v->c.ex[MF_STEP];
++        for (i = 0; i < m; i++, fg += st)
++            xl[i] *= fg;
++        v->c.ex[MF_GAIN] = fg < 0.0f ? 0.0f : fg > 1.0f ? 1.0f : fg;
++    }
++#endif
+ }
+ 
+ /* ------------------------------------------------------------ voile ---- */
+@@ -711,6 +782,10 @@ static void vo_init(voice_t *v)
+     for (i = 0; i < 16; i++)
+         v->o[i] = 0.0f;
+     v->o[7] = 1.0f;
++#if MODEL_CHANGE_FADE
++    v->c.ex[MF_GAIN] = 1.0f;                    /* (a voice taken for a new note: no fade of its own) */
++    v->c.ex[MF_PHASE] = 0.0f;
++#endif
+ }
+ static void vo_strike(voice_t *v) { v->o[7] = 1.0f; }
+ static void vo_prep(voice_t *v)
+@@ -719,6 +794,20 @@ static void vo_prep(voice_t *v)
+     int m = vo_model(c->ek[0]), i;
+     float f = c->freq, tb = c->e[1], co = c->e[2], b = c->e[3];
+     c->stereo = 0;
++#if MODEL_CHANGE_FADE
++    if ((int)v->o[0] != m + 1 && MF_MIDNOTE(v)) {
++#if MODEL_CHANGE_FADE == 2
++        m = (int)v->o[0] - 1;                    /* the note keeps the model it began on (the lock waits) */
++#else
++        if (c->ex[MF_PHASE] == 0.0f) {          /* a model turned mid-note: the old one fades out first */
++            c->ex[MF_GAIN] = 1.0f;
++            c->ex[MF_STEP] = MODEL_FADE_STEP;
++        }
++        c->ex[MF_PHASE] = (float)(1 + 2 * m);   /* (still, or fading out: the latest model wins) */
++        return;                                  /* the running model's values (ex[]) stand */
++#endif
++    }
++#endif
+     c->ex[19] = (float)m;
+     if ((int)v->o[0] != m + 1) {
+         float s7 = v->o[7];
+@@ -794,6 +883,21 @@ static void vo_prep(voice_t *v)
+ static void vo_chunk(voice_t *v)
+ {
+     cfg_t *c = &v->c;
++#if MODEL_CHANGE_FADE == 1
++    if (c->ex[MF_PHASE] != 0.0f) {              /* a model turned mid-note (vo_prep): its fade */
++        if (((int)c->ex[MF_PHASE] & 1) && c->ex[MF_GAIN] <= 0.0f) {   /* faded out: the switch, in silence */
++            int old = (int)v->o[0] - 1, want = vo_model(c->ek[0]);
++            if (want != old) {                   /* (the lock may have come back: then no switch at all) */
++                v->o[0] = 0.0f;                  /* vo_prep clears the state and the new model starts */
++                vo_prep(v);
++            }
++            c->ex[MF_GAIN] = 0.0f;              /* (it rises from here: vo_run's ramp) */
++            c->ex[MF_PHASE] = (float)(2 + 2 * (int)c->ex[19]);
++        } else if (!((int)c->ex[MF_PHASE] & 1) && c->ex[MF_GAIN] >= 1.0f) {
++            c->ex[MF_PHASE] = 0.0f;             /* the fade in is done: no fade at all */
++        }
++    }
++#endif
+     if ((int)c->ex[19] == VO_VOWEL && v->o[7] > 0.5f) {   /* the vowel's consonant at a note */
+         v->o[7] = 0.0f;
+         v->o[6] = (float)((xs(&v->rng) >> 8) & 7u);
+@@ -968,7 +1072,7 @@ static void vo_whisper(voice_t *v, float *xl, int m, float g)
+ }
+ static void vo_run(voice_t *v, float *xl, float *xr, int m)   /* (each model's gain at its last step) */
+ {
+-    int md = (int)v->c.ex[19];
++    int md = (int)v->c.ex[19], i;
+     float g = VO_GAIN[md];
+     (void)xr;
+     switch (md) {
+@@ -977,4 +1081,14 @@ static void vo_run(voice_t *v, float *xl, float *xr, int m)   /* (each model's g
+     case VO_CHOIR: vo_choir(v, xl, m, g); break;
+     default: vo_whisper(v, xl, m, g); break;
+     }
++#if MODEL_CHANGE_FADE == 1
++    if (v->c.ex[MF_PHASE] != 0.0f) {            /* a model turned mid-note: the output ramps (vo_chunk) */
++        float fg = v->c.ex[MF_GAIN], st = (int)v->c.ex[MF_PHASE] & 1 ? -v->c.ex[MF_STEP] : v->c.ex[MF_STEP];
++        for (i = 0; i < m; i++, fg += st)
++            xl[i] *= fg;
++        v->c.ex[MF_GAIN] = fg < 0.0f ? 0.0f : fg > 1.0f ? 1.0f : fg;
++    }
++#else
++    (void)i;
++#endif
+ }
+diff --git a/tests/host/braids_test.c b/tests/host/braids_test.c
+index 95fab13..aa56040 100644
+--- a/tests/host/braids_test.c
++++ b/tests/host/braids_test.c
+@@ -3,9 +3,11 @@
+  * every model bounded and finite at its knobs' corners and across the notes; each model sounds (and the knobs
+  * change it); the waveguides and the oscillators in tune (the measured pitch against the note's); the models'
+  * raw levels near each other's; cane keeps to its CN_SLOTS voices, and stays bounded while notes steal and a
+- * track turns to cane and back; the arp steps; a model turned mid-note stays bounded. Then the cost: instructions a sample of one voice (lp24, the whole
++ * track turns to cane and back; the arp steps; a model turned mid-note stays bounded, and the click it makes
++ * (measured against each model's own waveform) under MODEL_CHANGE_FADE: 0 resets the voice, 1 fades through the
++ * change, 2 keeps the note's model until the next one. Then the cost: instructions a sample of one voice (lp24, the whole
+  * voice) for each model against an ordinary engine's, and what that makes the cores' split units.
+- *   tests/host/braids_test.sh */
++ *   tests/host/braids_test.sh (once per MODEL_CHANGE_FADE) */
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <string.h>
+@@ -15,6 +17,10 @@
+ #include "synth.h"
+ int synth_sizeof(void);
+ 
++#ifndef MODEL_CHANGE_FADE                       /* (app/dsp/braids.h's: the build's choice, tests/host/braids_test.sh) */
++#define MODEL_CHANGE_FADE 0
++#endif
++
+ static int bad;
+ static void check(const char *what, int ok)
+ {
+@@ -104,6 +110,14 @@ static double rms(const float *x, int n)
+         a += (double)x[i] * (double)x[i];
+     return sqrt(a / n);
+ }
++static float max_step(const float *x, int n)    /* the largest jump a sample: a click shows here */
++{
++    float m = 0.0f;
++    int i;
++    for (i = 1; i < n; i++)
++        m = fabsf(x[i] - x[i - 1]) > m ? fabsf(x[i] - x[i - 1]) : m;
++    return m;
++}
+ /* the pitch: the normalised autocorrelation's best lag within +-40 % of the note's period, parabolic between lags */
+ static double pitch_of(const float *x, int n, double hz)
+ {
+@@ -305,7 +319,7 @@ int main(void)
+         check("cane under churn: bounded, finite", finite_ok && peak < 4.0f);
+     }
+ 
+-    /* the model turned mid-note: bounded */
++    /* the model turned mid-note: bounded, finite, and the click */
+     {
+         finite_ok = 1;
+         peak = 0.0f;
+@@ -319,6 +333,98 @@ int main(void)
+         }
+         check("a model turned mid-note: bounded, finite", finite_ok && peak < 4.0f);
+     }
++    {   /* a model turned mid-note on a held note: the click MODEL_CHANGE_FADE is about. A smooth, loud model
++         * (cane's bell ringing, voile's whisper) is sounding, then the model knob moves to one whose exciter
++         * starts from rest. The change is placed at six successive blocks, because how far the old model's
++         * sample steps depends on where its waveform is when the chunk turns over. The largest step is
++         * compared with each model's own steady waveform (`control`), so the test carries no machine-specific
++         * threshold: a reset steps the output by the old model's amplitude, the fade ramps it away, and the
++         * latch does not change the model at all. */
++        static float cap[N * 120];
++        static float ref[N * 120];
++        static float ctl[N * 60];
++        static const int FROM[NENG] = {4, 3};         /* cane: bell (a smooth ring); voile: whisper */
++        static const int TO[NENG] = {2, 1};           /* cane: reed; voile: vowel (their own steps are small) */
++        char what[128];
++        for (e = 0; e < NENG; e++) {
++            /* (the bell at the top of its timbre drones, as the manual says: still loud wherever the change lands) */
++            const int tb = ENG[e] == EG_CANE ? 127 : 100;
++            float jump = 0.0f, control = 0.0f, after = 0.0f, step;
++            int same, j, at;
++            for (j = 0; j < 2; j++) {                 /* the control: each model held, nothing changed */
++                reset(ENG[e], j ? TO[e] : FROM[e], tb, 64, 0);
++                synth_note_on(S, 0, 45, 127, 0, 1);
++                for (b = 0; b < 60; b++) {
++                    block();
++                    memcpy(ctl + b * N, L, sizeof L);
++                }
++                step = max_step(ctl + 20 * N, 30 * N);
++                control = step > control ? step : control;
++            }
++            for (j = 0; j < 9; j++) {                 /* the change at eight blocks; the ninth: without it */
++                reset(ENG[e], FROM[e], tb, 64, 0);
++                synth_note_on(S, 0, 45, 127, 0, 1);
++                at = 30 + (j < 8 ? j : 0);
++                for (b = 0; b < 120; b++) {
++                    if (j < 8 && b == at)
++                        par[0][TP_E1] = (uint8_t)TO[e];
++                    block();
++                    memcpy((j < 6 ? cap : ref) + b * N, L, sizeof L);
++                }
++                if (j < 8) {
++                    step = max_step(cap + at * N - 1, 3 * N + 1);   /* (from the sample before the change) */
++                    jump = step > jump ? step : jump;
++                }
++            }
++            after = rms(cap + 110 * N, 10 * N);
++            same = memcmp(cap, ref, sizeof cap) == 0;   /* (the last render: the note with no change at all) */
++            printf("    %-6s model %d -> %d mid-note: steps %.4f at most (each model's own %.4f); rms after "
++                   "%.4f; the same as without it: %s\n", EG_NAME[ENG[e]], FROM[e], TO[e], (double)jump,
++                   (double)control, (double)after, same ? "yes" : "no");
++            if (MODEL_CHANGE_FADE == 0) {
++                sprintf(what, "%s: model 0 resets the voice across the change (steps %.4f vs %.4f; "
++                        "MODEL_CHANGE_FADE=1 or 2 is the fix)", EG_NAME[ENG[e]], (double)jump, (double)control);
++                check(what, jump > control * 1.5f);
++            } else if (MODEL_CHANGE_FADE == 1) {
++                sprintf(what, "%s: a model turned mid-note fades through: steps %.4f at most, each model's own %.4f",
++                        EG_NAME[ENG[e]], (double)jump, (double)control);
++                check(what, jump <= control * 1.5f && after > 0.01f && finite_ok);
++            } else {
++                sprintf(what, "%s: a model turned mid-note waits for the next note: the same samples as without it",
++                        EG_NAME[ENG[e]]);
++                /* and it lets go at the next note: a note begun after the change is the new model (its first
++                 * 20 blocks differ from the reference, the note on the old model) */
++                reset(ENG[e], FROM[e], tb, 64, 0);
++                par[0][TP_E1] = (uint8_t)TO[e];
++                synth_note_on(S, 0, 45, 127, 0, 1);
++                for (b = 0; b < 20; b++) {
++                    block();
++                    memcpy(cap + b * N, L, sizeof L);
++                }
++                check(what, same && after > 0.01f && finite_ok && memcmp(cap, ref, 20 * N * sizeof(float)) != 0);
++            }
++        }
++    }
++    {   /* the other way a model can be automated: the track's LFO on the engine's first knob (LD_SYNTH,
++         * TP_LX 0 = the model), sweeping every model a cycle. Whatever MODEL_CHANGE_FADE does, it stays
++         * bounded and finite: mode 1 fades each change and mode 2 holds the note's model through all of them. */
++        for (e = 0; e < NENG; e++) {
++            char what[128];
++            reset(ENG[e], e == EG_CANE ? 4 : 3, 100, 64, 0);   /* cane's bell, voile's whisper */
++            par[0][TP_LTYPE] = LT_WAVE;
++            par[0][TP_LSPEED] = 70;                  /* a few Hz, free */
++            par[0][TP_LAMT] = 127;
++            par[0][TP_LDEST] = LD_SYNTH;
++            par[0][TP_LX] = 0;
++            finite_ok = 1;
++            peak = 0.0f;
++            synth_note_on(S, 0, 45, 127, 0, 1);
++            for (b = 0; b < 80; b++)
++                block();
++            sprintf(what, "%s: the LFO on the model knob, every model a cycle: bounded, finite", EG_NAME[ENG[e]]);
++            check(what, finite_ok && peak < 4.0f);
++        }
++    }
+ 
+     /* the cost: one voice held, lp24, its instructions a sample */
+     {
+diff --git a/tests/host/braids_test.sh b/tests/host/braids_test.sh
+index 843f1ce..9ea5c82 100644
+--- a/tests/host/braids_test.sh
++++ b/tests/host/braids_test.sh
+@@ -1,8 +1,9 @@
+ #!/bin/sh
+ # SPDX-License-Identifier: MPL-2.0
+-# The Braids engines' host test (tests/host/braids_test.c): cane, voile and gingham bounded, in tune, at their
+-# levels, cane's cap, the arp; their cost a voice by model. Built with the device's rules (C99, float only in the
+-# DSP, no fused multiply-add).
++# The Braids engines' host test (tests/host/braids_test.c): cane and voile bounded, in tune, at their levels,
++# cane's cap, the arp, and a model turned mid-note (the click, and what MODEL_CHANGE_FADE does with it: the
++# suite runs once per mode, 0 upstream / 1 fades through / 2 latches until the next note); their cost a voice
++# by model. Built with the device's rules (C99, float only in the DSP, no fused multiply-add).
+ #   tests/host/braids_test.sh
+ set -e
+ cd "$(dirname "$0")/../.."
+@@ -12,6 +13,10 @@ mkdir -p build/gen build/host
+ [ -f build/gen/wavetables.h ] || "$PY" tools/gen_wavetables.py build/gen/wavetables.h
+ [ -f build/gen/samples.h ] || "$PY" tools/gen_samples.py build/gen/samples.h >/dev/null
+ "$PY" tools/gen_presets.py build/gen/presets.h
+-$CC -O2 -ffp-contract=off -std=c99 -Wall -Wextra -Wdouble-promotion -Werror -DPLAT_HOST -Iapp/dsp -Ibase/include -Ibuild/gen \
+-    -o build/host/braids_test tests/host/braids_test.c app/dsp/synth.c app/dsp/drumline.c app/dsp/digisophie.c app/dsp/sample.c -lm
+-build/host/braids_test
++for n in 0 1 2; do
++    $CC -O2 -ffp-contract=off -std=c99 -Wall -Wextra -Wdouble-promotion -Werror -DPLAT_HOST -DMODEL_CHANGE_FADE=$n \
++        -Iapp/dsp -Ibase/include -Ibuild/gen -o build/host/braids_test-$n tests/host/braids_test.c app/dsp/synth.c \
++        app/dsp/drumline.c app/dsp/digisophie.c app/dsp/sample.c -lm
++    echo "MODEL_CHANGE_FADE=$n"
++    build/host/braids_test-$n
++done
+-- 
+2.55.0
+

@@ -1,0 +1,70 @@
+From f364d7e51ca1401e2242afb685d57b532173fa83 Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Mon, 26 Oct 2026 15:27:15 +0100
+Subject: [PATCH 9/9] build.py: MODEL_CHANGE_FADE, the build's choice for a
+ Braids model turned mid-note
+
+LOOM-8 clicks when an automated model knob changes cane's or voile's model while a note sounds:
+the engine resets the voice's whole state (its waveguide, or its partials), so the output steps
+from the sounding model's amplitude toward silence and the new model starts from rest. An
+experiment needs both treatments to be buildable and audible side by side, so opt_flags()
+forwards MODEL_CHANGE_FADE=0|1|2 as -DMODEL_CHANGE_FADE=..., the way MIXED_RENDERING=1 is
+already forwarded.
+
+Being in opt_flags(), the choice reaches the device, the host simulator and the web emulator the
+same way. Unset, nothing is added and the app keeps its own default (0, upstream's behavior), so
+no other firmware's build changes.
+
+The host's and the web's o2 units were not given opt_flags() at all, which would have hidden the
+choice from an app's DSP: LOOM-8's dsp/synth.c, where braids.h is included, is an o2 unit. They
+now receive the same optional flags as the device's o2 units, so every optional build flag
+reaches every unit that might read it.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ tools/build.py | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/tools/build.py b/tools/build.py
+index 2f50624..7e3a5fe 100755
+--- a/tools/build.py
++++ b/tools/build.py
+@@ -861,11 +861,16 @@ def build_id():
+ 
+ def opt_flags():
+     """the optional parts an fm1.toml turns on that need no SDK: the same on the device, the host and the web;
+-    MIXED_RENDERING=1: the linear-light text blend (device/gfx.c), not the default sRGB one"""
++    MIXED_RENDERING=1: the linear-light text blend (device/gfx.c), not the default sRGB one;
++    MODEL_CHANGE_FADE=0|1|2: what a Braids model turned mid-note does (an app's dsp/braids.h: 0 the reset,
++    1 fades through it, 2 latches until the next note; set, it is forwarded as it is)"""
+     flags = [f"-D{flag}=1" for key, flag in (("mirror", "FM1B_MIRROR"), ("backup", "FM1B_BACKUP"), ("cpu2", "FM1B_CPU2"), ("usb_host", "FM1B_USB_HOST"))
+              if (CONF.get(key) and os.environ.get(flag) != "0") or os.environ.get(flag) == "1"]   # (FM1B_MIRROR=1: a build with it, fm1.toml as it is; FM1B_BACKUP=0: without)
+     if os.environ.get("MIXED_RENDERING") == "1":
+         flags.append("-DMIXED_RENDERING=1")
++    mcf = os.environ.get("MODEL_CHANGE_FADE")
++    if mcf in ("0", "1", "2"):
++        flags.append(f"-DMODEL_CHANGE_FADE={mcf}")
+     return flags
+ 
+ 
+@@ -876,7 +881,7 @@ def build_host():
+     out.mkdir(parents=True, exist_ok=True)
+     exe = out / (STEM + "_host")                  # NAME_host; NAME-usb_host with --no-ble
+     inc_dirs = [f"-I{d}" for d in (SRC / "device", SRC / "include", SRC / "lib", APP, GEN, *(APP / d for d in CONF.get("include", [])))]
+-    o2_objs = o2_objects(os.environ.get("CC", "cc"), ["-O2", "-ffp-contract=off", "-std=c99", "-w", "-DPLAT_HOST", *inc_dirs],
++    o2_objs = o2_objects(os.environ.get("CC", "cc"), ["-O2", "-ffp-contract=off", "-std=c99", "-w", "-DPLAT_HOST", *opt_flags(), *inc_dirs],
+                          out / "o2")
+     cmd = [os.environ.get("CC", "cc"), "-O2", "-ffp-contract=off", "-std=c99", "-Wall", "-Wextra",
+            "-Wno-unused-function", "-Wno-unused-parameter", "-DPLAT_HOST", *opt_flags(), *["-DFM1B_BLE=1"] * BLE, *["-DFM1B_BLE_CENTRAL=1"] * (BLE and bool(CONF.get("ble_central"))), *["-DFM1B_WIFI=1"] * WIFI,
+@@ -897,7 +902,7 @@ def build_web():
+     emu = OUT / "emu"
+     emu.mkdir(parents=True, exist_ok=True)
+     web_inc = [f"-I{d}" for d in (SRC / "host", SRC / "device", SRC / "include", SRC / "lib", APP, GEN, *(APP / d for d in CONF.get("include", [])))]
+-    o2_objs = o2_objects("emcc", ["-O2", "-ffp-contract=off", "-std=gnu99", "-w", "-DPLAT_HOST", "-DPLAT_WEB", *web_inc],
++    o2_objs = o2_objects("emcc", ["-O2", "-ffp-contract=off", "-std=gnu99", "-w", "-DPLAT_HOST", "-DPLAT_WEB", *opt_flags(), *web_inc],
+                          emu / "o2")
+     cmd = ["emcc", "-O2", "-ffp-contract=off", "-std=gnu99", "-Wall", "-Wno-unused-function", "-Wno-unused-parameter",
+            "-Wno-unused-variable", "-DPLAT_HOST", "-DPLAT_WEB", *opt_flags(), *["-DFM1B_BLE=1"] * BLE, *["-DFM1B_BLE_CENTRAL=1"] * (BLE and bool(CONF.get("ble_central"))), *["-DFM1B_WIFI=1"] * WIFI, *(f'-DAPP_VERSION="{VERSION}"',) * bool(VERSION),
+-- 
+2.55.0
+
