@@ -490,6 +490,9 @@ names, not to engines `main`: engines `main` adds the PHASE engine and an FS-rat
 Felucca has its own `firmware/src/eng_phase.c` and goldens that pair with the older sources. The SDK
 tag and the toolchain package are the newest published.
 
+`./scripts/check-upstream.sh` reports which of these have moved since they were pinned, and by how
+many commits (§6).
+
 ---
 
 ## 4. Layout
@@ -519,6 +522,7 @@ scripts/
   setup.sh                   clones, archives, links, patches, venv, prerequisite report
   lib/common.sh              ROOT, the pins, environment, shared helpers
   lib/usb_desc.py            read a built image's USB descriptors; checks the host-compat set
+  check-upstream.sh          what each pin is missing from upstream's default branch (§6)
   build-loom.sh   deploy-loom.sh   verify-loom.sh
   build-amb.sh    deploy-amb.sh    verify-amb.sh
   build-template.sh  deploy-template.sh  verify-base.sh
@@ -621,13 +625,20 @@ Regenerating an existing one: delete the old `.patch` files in that problem dire
 
 ## 6. Bumping a pin
 
-1. Edit `revisions.env` with the new commit(s). For an archive-only upstream such as Mutable
-   Dreams, update the archive name and its SHA-256 too (and the archive's top directory, which
-   `setup.sh` moves into `src/`).
-2. Move `clones/` away (or delete it) so `setup.sh` clones fresh at the new pins. The pin check
+1. `./scripts/check-upstream.sh` lists every pinned repo with the number of commits upstream's
+   default branch has that the pin does not, the newest commit there and any release tag; `-q`
+   prints only the repos that have moved, and the exit status is 1 when any has. It fetches into
+   `clones/` when `setup.sh` has made them and into `.cache/upstream-check/` otherwise, so it
+   works before a setup too. For an archive-only upstream such as Mutable Dreams it counts
+   commits and names the newest tag, but the source archive is pinned separately: take the new
+   release's archive name and SHA-256 (and the top directory `setup.sh` moves into `src/`) from
+   that release by hand.
+2. Edit `revisions.env` with the new commit(s) — and, for an archive-only upstream such as
+   Mutable Dreams, the archive name, SHA-256 and top directory from step 1.
+3. Move `clones/` away (or delete it) so `setup.sh` clones fresh at the new pins. The pin check
    refuses to move an existing `experiments` branch forward, so this step is not optional.
-3. Run `./scripts/setup.sh --no-patches` to get the new trees linked without our changes.
-4. For each patch that the new pins made stale: apply the intent by hand in the clone, commit on
+4. Run `./scripts/setup.sh --no-patches` to get the new trees linked without our changes.
+5. For each patch that the new pins made stale: apply the intent by hand in the clone, commit on
    `experiments`, delete the old `.patch` file, and regenerate it into a scratch directory first
    (the file name follows the subject, so writing straight into the problem directory leaves the
    stale file beside the new one). Example:
@@ -638,14 +649,17 @@ Regenerating an existing one: delete the old `.patch` files in that problem dire
    cp /tmp/regen/*.patch patches/fm1-base/01-usb-host-compat/
    ```
 
-5. Move `clones/` away again and run `./scripts/setup.sh` twice, to prove every patch applies on a
+6. Move `clones/` away again and run `./scripts/setup.sh` twice, to prove every patch applies on a
    fresh clone and the second run is a no-op.
-6. `./scripts/verify-base.sh`, `./scripts/verify-loom.sh`, `./scripts/verify-amb.sh` (and the
+7. `./scripts/verify-base.sh`, `./scripts/verify-loom.sh`, `./scripts/verify-amb.sh` (and the
    standalone firmwares' verifies when their pins move), then the builds, then re-check hardware if
    the change touches USB.
 
 If `git am` stops inside a clone (a patch that neither applies nor is applied), the clone is left
 mid-session: `git -C clones/<repo> am --abort` (and `am --show-current-patch` to see where).
+
+Not every commit ahead is a reason to move a pin: Felucca-Engines follows Felucca's own submodule
+pointer and fm1-base follows its own `main`, not either firmware's (`§3` has each pin's rationale).
 
 ---
 
