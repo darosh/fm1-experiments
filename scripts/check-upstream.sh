@@ -100,13 +100,22 @@ do
     behind=$(git -C "$repo_dir" rev-list --count "$tip..$pin" 2>/dev/null || echo 0)
     tip_info=$(git -C "$repo_dir" log -1 --format='%h %cs %s' "$tip" 2>/dev/null | cut -c1-80)
 
-    if [ "$behind" != 0 ]; then
-        state="diverged"
-    else
-        state=$ahead
-    fi
+    # "ahead" is the count of commits in upstream's default branch that the pin lacks. A pin that
+    # contains the tip and adds commits (our fm1-base and felucca-bsp own-bt branch pins) is current,
+    # not moved: report its extra commits beside the tip instead of calling it diverged.
+    is_moved=0
     if [ "$ahead" = 0 ] && [ "$behind" = 0 ]; then
+        state=$ahead
         tip_info="up to date ($tip_info)"
+    elif [ "$ahead" = 0 ]; then
+        state=$ahead
+        tip_info="pin is $behind commits ahead ($tip_info)"
+    elif [ "$behind" = 0 ]; then
+        state=$ahead
+        is_moved=1
+    else
+        state="diverged"
+        is_moved=1
     fi
     # A tag on the new tip (or between it and the pin) is the actionable "new release".
     tip_tag=$(newest_tag "$repo_dir" "$tip")
@@ -115,7 +124,7 @@ do
         tip_info="$tip_info  [$tip_tag]"
     fi
 
-    if [ "$ahead" != 0 ] || [ "$behind" != 0 ]; then
+    if [ "$is_moved" = 1 ]; then
         moved=$((moved + 1))
         printf '%-16s %8s  %s\n' "$name" "$state" "$tip_info"
     elif [ "$only_moved" = 0 ]; then

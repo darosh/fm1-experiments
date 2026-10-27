@@ -1,4 +1,4 @@
-From f364d7e51ca1401e2242afb685d57b532173fa83 Mon Sep 17 00:00:00 2001
+From 7f2da1b7c2c6656625825679b51c0bdb8dbc5d38 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Mon, 26 Oct 2026 15:27:15 +0100
 Subject: [PATCH 9/9] build.py: MODEL_CHANGE_FADE, the build's choice for a
@@ -26,10 +26,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  1 file changed, 8 insertions(+), 3 deletions(-)
 
 diff --git a/tools/build.py b/tools/build.py
-index 2f50624..7e3a5fe 100755
+index c2e0f38..347925f 100755
 --- a/tools/build.py
 +++ b/tools/build.py
-@@ -861,11 +861,16 @@ def build_id():
+@@ -896,11 +896,16 @@ def build_id():
  
  def opt_flags():
      """the optional parts an fm1.toml turns on that need no SDK: the same on the device, the host and the web;
@@ -47,7 +47,7 @@ index 2f50624..7e3a5fe 100755
      return flags
  
  
-@@ -876,7 +881,7 @@ def build_host():
+@@ -911,7 +916,7 @@ def build_host():
      out.mkdir(parents=True, exist_ok=True)
      exe = out / (STEM + "_host")                  # NAME_host; NAME-usb_host with --no-ble
      inc_dirs = [f"-I{d}" for d in (SRC / "device", SRC / "include", SRC / "lib", APP, GEN, *(APP / d for d in CONF.get("include", [])))]
@@ -56,7 +56,7 @@ index 2f50624..7e3a5fe 100755
                           out / "o2")
      cmd = [os.environ.get("CC", "cc"), "-O2", "-ffp-contract=off", "-std=c99", "-Wall", "-Wextra",
             "-Wno-unused-function", "-Wno-unused-parameter", "-DPLAT_HOST", *opt_flags(), *["-DFM1B_BLE=1"] * BLE, *["-DFM1B_BLE_CENTRAL=1"] * (BLE and bool(CONF.get("ble_central"))), *["-DFM1B_WIFI=1"] * WIFI,
-@@ -897,7 +902,7 @@ def build_web():
+@@ -932,7 +937,7 @@ def build_web():
      emu = OUT / "emu"
      emu.mkdir(parents=True, exist_ok=True)
      web_inc = [f"-I{d}" for d in (SRC / "host", SRC / "device", SRC / "include", SRC / "lib", APP, GEN, *(APP / d for d in CONF.get("include", [])))]

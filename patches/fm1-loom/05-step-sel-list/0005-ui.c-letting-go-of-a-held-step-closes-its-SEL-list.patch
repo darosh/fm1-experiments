@@ -1,4 +1,4 @@
-From 384418e9f95c5d90c57ba51da70186477977ff7b Mon Sep 17 00:00:00 2001
+From f5cb0d68cd32218ef1717bd62f1c90ca1a3d7ca1 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Mon, 26 Oct 2026 17:35:08 +0100
 Subject: [PATCH 5/5] ui.c: letting go of a held step closes its SEL list
@@ -22,7 +22,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  2 files changed, 14 insertions(+), 2 deletions(-)
 
 diff --git a/app/ui.c b/app/ui.c
-index 46ed727..a6d5fee 100644
+index 5276a7f..8d3d1a8 100644
 --- a/app/ui.c
 +++ b/app/ui.c
 @@ -1606,9 +1606,10 @@ static void key_up(int k)

@@ -140,9 +140,10 @@ Flash (`--info` prints the connected FM-1's identity and writes nothing):
 ```
 
 `build-loom.sh` passes its arguments to `fm1-loom/build.sh`: `--host` (host simulator), `--web`
-(browser emulator), `--demo` (mirroring for demos), `--release X.Y`, `--no-ble`. v0.8.1's `fm1.toml`
-turns Bluetooth MIDI and the USB MIDI host on in the default build (`--no-ble` builds `loom-usb.fwsc`
-without the radio); the image is 526180 B, with 90304 B of RAM used and the pool 97% full.
+(browser emulator), `--demo` (mirroring for demos), `--release X.Y`, `--no-ble`. v0.9's `fm1.toml`
+turns Bluetooth MIDI, Bluetooth audio and the USB MIDI host on in the default build (`--no-ble`
+builds `loom-usb.fwsc` without the radio); the image is 524260 B, with 93520 B of RAM used and
+the pool 335460 B of 344064.
 
 ### AMB-1 (fm1-amb)
 
@@ -469,10 +470,10 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 
 | repo | commit | role |
 |---|---|---|
-| `charlesvestal/fm1-loom` | `dfc94c6` (v0.8.1 + site republish) | LOOM-8 |
+| `charlesvestal/fm1-loom` | `452d822` (v0.9) | LOOM-8 |
 | `charlesvestal/fm1-amb` | `188b0a42` (v1.3) | AMB-1 |
-| `charlesvestal/fm1-base` | `934e40d` | the platform layer (both firmwares' `base`) |
-| `hugelton/felucca-bsp` | `2cd696a` | the chip layer (`fm1-base/bsp`) |
+| `charlesvestal/fm1-base` | `d0133c2` (own-bt) | the platform layer (both firmwares' `base`) |
+| `hugelton/felucca-bsp` | `305c372` (own-bt) | the chip layer (`fm1-base/bsp`) |
 | `hugelton/Felucca` | `63f88ec` | Felucca (main, 5 commits past v1.6.1) |
 | `hugelton/Felucca-Engines` | `c46e008` | Felucca's `firmware/engines` submodule |
 | `aceyprime/zen-1` | `ec92952` (v1.2) | ZEN-1 |
@@ -490,14 +491,18 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 
 The repos are pinned to their latest `main` (LOOM-8, AMB-1, ZEN-1, Melodee and Mutable Dreams are
 at their latest release tag; TONITOR, SLOOP, Dinghy and CS-1 have none, so their pins are their
-latest main commits). ZEN-1's two `fm1-fomni` rows are not
+latest main commits). The two exceptions are LOOM-8's platform pins: fm1-loom v0.9 moves to
+Optimist's own Bluetooth stack, and its base submodule names fm1-base's `own-bt` branch (`d0133c2`,
+15 commits past `main`) whose bsp submodule names felucca-bsp's `own-bt` branch (`305c372`, 6 commits
+past `main`). Those two branches merge `main` and carry the radio drivers and `bt/` sources v0.9
+needs, so they are pinned instead of `main`. ZEN-1's two `fm1-fomni` rows are not
 clones: `setup.sh` fetches them by SHA into `clones/zen-1` for its platform guard, because they are
 not on any branch of that repository. Mutable Dreams' pin is two things: the v1.1 commit that
 publishes the release (and its checksums), and the SHA-256 of the source archive that commit
 carries (the repository has no source tree of its own).
-One fm1-base and one felucca-bsp are shared by both fm1-base firmwares, so the base is pinned to its
-own `main` rather than to either firmware's submodule pointer (`934e40d` for LOOM-8 v0.8.1 — the
-pin itself — and `15dff6d` for AMB-1, an ancestor). Felucca-Engines is pinned to the commit Felucca's own tree
+One fm1-base and one felucca-bsp are shared by both fm1-base firmwares. AMB-1 v1.3's submodule
+names fm1-base `934e40d` (an ancestor of the pinned `own-bt` tip); LOOM-8 v0.9 names `d0133c2`, the
+pin itself. Felucca-Engines is pinned to the commit Felucca's own tree
 names, not to engines `main`: engines `main` adds the PHASE engine and an FS-rate refactor, while
 Felucca has its own `firmware/src/eng_phase.c` and goldens that pair with the older sources. The SDK
 tag and the toolchain package are the newest published.
@@ -568,8 +573,10 @@ checkout (patches 03 in each set).
 
 ```
 patches/
-  felucca-bsp/01-usb-host-compat/   usb.c: interface order, serial number, an optional IAD
-  fm1-base/01-usb-host-compat/      build.py: usb_midi_last, usb_iad, usb_serial; descriptor test
+  felucca-bsp/01-usb-host-compat/   usb.c: interface order, serial number, an optional IAD, beside
+                                    upstream's AS_FIRST
+  fm1-base/01-usb-host-compat/      build.py: usb_midi_last, usb_iad, usb_serial, beside upstream's
+                                    usb_audio_first; descriptor test
   fm1-base/02-sdk-v1.2.14/          build.py: the SDK hashes of the installed V1.2.14; the BLE trim
                                     accepts V1.2.14's multilink configuration (already 0)
   fm1-base/03-symlinked-bsp/        build.py: the source root covers a symlinked bsp
@@ -650,7 +657,9 @@ Regenerating an existing one: delete the old `.patch` files in that problem dire
 
 1. `./scripts/check-upstream.sh` lists every pinned repo with the number of commits upstream's
    default branch has that the pin does not, the newest commit there and any release tag; `-q`
-   prints only the repos that have moved, and the exit status is 1 when any has. It fetches into
+   prints only the repos that have moved, and the exit status is 1 when any has. A pin on a branch
+   that contains the default branch's tip and adds commits of its own — our fm1-base and felucca-bsp
+   `own-bt` pins — is reported as "pin is N commits ahead" and does not count as moved. It fetches into
    `clones/` when `setup.sh` has made them and into `.cache/upstream-check/` otherwise, so it
    works before a setup too. For an archive-only upstream such as Mutable Dreams it counts
    commits and names the newest tag, but the source archive is pinned separately: take the new
@@ -784,7 +793,10 @@ the streaming interface before MIDI **inside the AC header's collection** but le
 order `AC, MIDI, AS`. That is variant C above plus the old order — and a stock Felucca build's USB
 audio input does not appear on macOS 15 (tested on the device). Its own MENU > USB SERIAL OFF, which
 re-enumerates as a plain audio + MIDI device (`FELUCCA_CDC=0`'s descriptors), does not help either,
-for the same reason: it keeps the old order.
+for the same reason: it keeps the old order. felucca-bsp carries the same `FELUCCA_UAC_AS_FIRST`
+(PR #10) and fm1-base exposes it as `usb_audio_first`; LOOM-8 v0.9's `fm1.toml` asks for it. Our
+descriptor patch still sets `FELUCCA_UAC_MIDI_LAST` alongside it: when MIDI_LAST is on, the AC
+collection lists only the streams and AS_FIRST's ordering is moot, so the build remains variant A.
 
 `patches/felucca/01-usb-host-compat` therefore ports the same three changes into Felucca's own
 `usb.c`: `FELUCCA_UAC_MIDI_LAST` (the fix), `FELUCCA_UAC_IAD` (hygiene) and `FELUCCA_USB_SERIAL`

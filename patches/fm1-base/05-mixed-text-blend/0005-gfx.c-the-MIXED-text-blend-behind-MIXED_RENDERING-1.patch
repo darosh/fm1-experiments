@@ -1,7 +1,7 @@
-From a465d4c97f16c7a96d2fec24bab936bb72e494cc Mon Sep 17 00:00:00 2001
+From 0e6886cf577e6d08e50a9228d4c3df72ca79cb62 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Mon, 26 Oct 2026 09:39:13 +0100
-Subject: [PATCH 5/8] gfx.c: the MIXED text blend, behind MIXED_RENDERING=1
+Subject: [PATCH 6/9] gfx.c: the MIXED text blend, behind MIXED_RENDERING=1
 
 The partial-coverage blend is done in gamma-encoded RGB565, so a 20 % edge of a
 150-grey glyph is drawn at 30/255 where linear light gives ~70/255; on the panel
@@ -67,10 +67,10 @@ index 4d4f45c..5bf4089 100644
                      cv_px[(uint32_t)py * cv_w + (uint32_t)px] = swap16(c);
                  } else {
 diff --git a/tools/build.py b/tools/build.py
-index 66c709f..a8fd61b 100755
+index 163efa9..b035b34 100755
 --- a/tools/build.py
 +++ b/tools/build.py
-@@ -857,9 +857,13 @@ def build_id():
+@@ -892,9 +892,13 @@ def build_id():
  
  
  def opt_flags():

@@ -1,7 +1,7 @@
-From de05ae7baa6f13a2c5242ca2f274b6b8586c8e5b Mon Sep 17 00:00:00 2001
+From 1b9822629feaf61bfe6eb298fc117fd0efea5f43 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Mon, 26 Oct 2026 09:41:01 +0100
-Subject: [PATCH 7/8] build.py: the BLE trim accepts an SDK that already has
+Subject: [PATCH 3/9] build.py: the BLE trim accepts an SDK that already has
  the multilink cuts at 0
 
 AC79NN_SDK_V1.2.14's lib_btctrler_config.c already sets
@@ -17,10 +17,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/tools/build.py b/tools/build.py
-index f6f5167..2f50624 100755
+index 86d7af5..5f9afcc 100755
 --- a/tools/build.py
 +++ b/tools/build.py
-@@ -377,8 +377,8 @@ BLE_CONFIG = {"apps/common/config/log_config/lib_btctrler_config.c": [
+@@ -382,8 +382,8 @@ BLE_CONFIG = {"apps/common/config/log_config/lib_btctrler_config.c": [
      (r"(const int CONFIG_LMP_MASTER_ESCO_ENABLE\s*=\s*)1", r"\g<1>0"),
      (r"(const int CONFIG_BREDR_INQUIRY\s*=\s*)1", r"\g<1>0"),
      (r"(const int config_btctler_dual_a2dp\s*=\s*)1", r"\g<1>0"),

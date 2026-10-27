@@ -1,7 +1,7 @@
-From 587a7f2b0ea2716627c39f785dae817560668f35 Mon Sep 17 00:00:00 2001
+From 90b4f5803d1414787d3295fad3b6e20c9ec3ff3a Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Sat, 24 Oct 2026 11:06:39 +0200
-Subject: [PATCH 2/8] build.py: pin the SDK to AC79NN_SDK_V1.2.14_2026-10-13
+Subject: [PATCH 2/9] build.py: pin the SDK to AC79NN_SDK_V1.2.14_2026-10-13
 
 SDK_SHA256 named the V1.2.1 files while the installed SDK is V1.2.14, so every build warned.
 cfg_tool.bin is unchanged between the two; uboot.boot and cfg/eq_cfg_hw.bin differ.
@@ -16,10 +16,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  1 file changed, 7 insertions(+), 4 deletions(-)
 
 diff --git a/tools/build.py b/tools/build.py
-index 4598e2e..4ba6f8e 100755
+index 281223b..86d7af5 100755
 --- a/tools/build.py
 +++ b/tools/build.py
-@@ -123,11 +123,14 @@ CPU = "r3"                          # the core: the compiler, the LTO plugin and
+@@ -130,11 +130,14 @@ CPU = "r3"                          # the core: the compiler, the LTO plugin and
  FPU = [f"-mcpu={CPU}", "-mfprev1", "-ffp-contract=off"]
  LINE = re.compile(r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*\t(.*)$")
  
@@ -37,7 +37,7 @@ index 4598e2e..4ba6f8e 100755
  }
  
  PRODUCT = None                      # package identity (fm1.toml id_prefix; see main)
-@@ -968,7 +971,7 @@ def main():
+@@ -1006,7 +1009,7 @@ def main():
      fm1pkg_make.SDK = a.sdk
      for rel, sha in SDK_SHA256.items():          # fail early without the SDK
          if hashlib.sha256(fm1pkg_make.sdk_file(rel)).hexdigest() != sha:

@@ -1,7 +1,7 @@
-From 21b5a9c0d6c5a93ea5240bd4fcd0c8705a4463cb Mon Sep 17 00:00:00 2001
+From 0d28b2890bc8bb1bc69fb91037b0888d352518cb Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Fri, 23 Oct 2026 18:04:56 +0200
-Subject: [PATCH 1/2] USB: MIDI behind the streams, an audio IAD, and the USB
+Subject: [PATCH 1/5] USB: MIDI behind the streams, an audio IAD, and the USB
  names
 
 Enables fm1-base's usb_midi_last and usb_iad:
@@ -20,26 +20,28 @@ sharing VID/PID 1209:0001 (AMB-1's name no longer sticks).
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>
 ---
- app/fm1.toml | 8 ++++++--
- 1 file changed, 6 insertions(+), 2 deletions(-)
+ app/fm1.toml | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
 
 diff --git a/app/fm1.toml b/app/fm1.toml
-index 9094947..a89ace6 100644
+index 205c298..ee0f244 100644
 --- a/app/fm1.toml
 +++ b/app/fm1.toml
-@@ -1,8 +1,8 @@
+@@ -1,9 +1,9 @@
  # LOOM-8's build settings (fm1-base's tools/build.py: ./build.sh)
  name = "loom"                  # the build's files: loom.fwsc, loom-X.Y.fwsc, loom_host (APP_NAME, LOOM-8, is in app.h)
  id_prefix = "FM-1_10"          # package identity: dev FM-1_1000, releases FM-1_10XXYYZZ (every single digit was taken)
 -usb_manufacturer = "LOOM-8"
 -usb_product = "LOOM-8 FM-1"
+-ble = true                     # Bluetooth MIDI with a computer
 +usb_manufacturer = "FM-1"      # Manufacturer in Audio MIDI Setup
 +usb_product = "FM-1 LOOM-8"    # Model, and the CoreAudio / CoreMIDI device name
- ble = true                     # Bluetooth MIDI with a computer (the ble-spike branch)
- ble_trim = true                # a MIDI peripheral only: JieLi's central, classic and test code cut (base/tools/build.py)
- ble_no_pairing = true          # no pairing or encryption: Bluetooth MIDI needs neither (iOS and macOS connect; -19 KB flash)
-@@ -11,6 +11,10 @@ ble_heap_kb = 12               # its heap at 12 KB, not 24 (7.1 KB at most: a li
- usb_audio_in = true            # the master output recordable over USB (Setup's USB AUDIO: follows the knob, or full)
++ble = true                     # Bluetooth MIDI with a computer (the own stack)
+ ble_stack = "own"              # Optimist's own stack (fm1-base bt/), no JieLi library
+ ble_pairing = true
+ ble_central = true
+@@ -12,6 +12,10 @@ usb_audio_in = true            # the master output recordable over USB (Setup's
+ usb_audio_first = true         # the audio streaming interface listed first (macOS shows the audio device: felucca-bsp #10)
  usb_audio_out = false
  usb_host = true                # the USB port as a MIDI host (Setup's USB PORT): a controller or a synth, through a powered hub
 +usb_midi_last = true           # MIDI after the streaming interfaces (macOS audio, Felucca#67): bisected,

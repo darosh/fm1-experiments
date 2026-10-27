@@ -1,7 +1,7 @@
-From d80e2917facb3b5843c3556e456244210b0dc09b Mon Sep 17 00:00:00 2001
+From ef7a805b082132f3e1dc93ccdfb15a0a69fe981c Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Mon, 26 Oct 2026 09:41:49 +0100
-Subject: [PATCH 8/8] ble/shim: provide usr_timeout_del in the Bluetooth-only
+Subject: [PATCH 8/9] ble/shim: provide usr_timeout_del in the Bluetooth-only
  build
 
 AC79NN_SDK_V1.2.14's btctrler.a calls usr_timeout_del from multilink_schedule.c.o

@@ -1,4 +1,4 @@
-From f3122683738aedea68aaf9fadc8de7047ba9ab02 Mon Sep 17 00:00:00 2001
+From f900071c6abff340d598ad7395bf2acd3ad929d6 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Mon, 26 Oct 2026 17:35:00 +0100
 Subject: [PATCH 4/5] ui.c: a held step's SEL list keeps SELECT from the lock
@@ -27,10 +27,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  create mode 100644 tests/scenarios/heldsteplist.xy
 
 diff --git a/app/ui.c b/app/ui.c
-index 17c8ff4..46ed727 100644
+index b4311e2..5276a7f 100644
 --- a/app/ui.c
 +++ b/app/ui.c
-@@ -3305,7 +3305,8 @@ static void input(void)
+@@ -3511,7 +3511,8 @@ static void input(void)
          ui.act_t = plat_ms();
      if (ui.ask)
          return;

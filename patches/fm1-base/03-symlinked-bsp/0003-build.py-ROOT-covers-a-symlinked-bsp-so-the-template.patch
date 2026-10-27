@@ -1,7 +1,7 @@
-From e2ac7657f8be55ce5261a25a4bcfaaec70cb428f Mon Sep 17 00:00:00 2001
+From 1e76e90d22b16cb9b3db4a9ee88bd250a7a94323 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Sat, 24 Oct 2026 12:18:35 +0200
-Subject: [PATCH 3/8] build.py: ROOT covers a symlinked bsp, so the template
+Subject: [PATCH 4/9] build.py: ROOT covers a symlinked bsp, so the template
  builds from fm1-base alone
 
 The template is an app inside fm1-base, so ROOT was commonpath(fm1-base, template) = fm1-base.
@@ -16,10 +16,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/tools/build.py b/tools/build.py
-index 4ba6f8e..66c709f 100755
+index 5f9afcc..163efa9 100755
 --- a/tools/build.py
 +++ b/tools/build.py
-@@ -950,7 +950,9 @@ def main():
+@@ -988,7 +988,9 @@ def main():
      STEM = NAME + ("-usb" if CONF.get("ble") and not BLE else "")
      OUT = APP / "build"
      GEN, LDR = OUT / "gen", OUT / "loader"

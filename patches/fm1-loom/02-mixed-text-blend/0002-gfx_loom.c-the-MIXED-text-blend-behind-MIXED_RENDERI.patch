@@ -1,7 +1,7 @@
-From eeee60578bad53ea374c59f0160abbe8a5ec6035 Mon Sep 17 00:00:00 2001
+From 39af183d14947aa0e1495733050d8233ab135095 Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Mon, 26 Oct 2026 09:12:41 +0100
-Subject: [PATCH 2/2] gfx_loom.c: the MIXED text blend, behind
+Subject: [PATCH 2/5] gfx_loom.c: the MIXED text blend, behind
  MIXED_RENDERING=1
 
 Same change as fm1-base's gfx.c: partial coverage is remapped for linear light
