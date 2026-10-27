@@ -33,6 +33,7 @@ fi
 for spec in \
     fm1-loom:FM1_LOOM \
     fm1-amb:FM1_AMB \
+    frasil:FRASIL \
     fm1-base:FM1_BASE \
     felucca-bsp:FELUCCA_BSP \
     felucca:FELUCCA \

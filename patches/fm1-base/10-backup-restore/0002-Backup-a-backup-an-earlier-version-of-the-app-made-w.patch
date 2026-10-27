@@ -1,0 +1,207 @@
+From 9cecdabbb7eaa4c7372631b87ba19685aa4400db Mon Sep 17 00:00:00 2001
+From: Styves Goupil <styves.goupil@gmail.com>
+Date: Fri, 23 Oct 2026 21:47:50 -0400
+Subject: [PATCH 2/2] Backup: a backup an earlier version of the app made, with
+ fewer objects, restores
+
+An app that adds an object to APP_BACKUP_OBJS (at the end) can still restore its earlier backups: the count may be
+smaller than the app's, the records the first of APP_BACKUP_OBJS; the objects the backup did not have are made absent,
+as a record of length 0 does. None, or more than the app has: refused (RS_E_HEAD) as before. The simulator the same,
+and backup_trim FILE N to make such a file.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ device/backup.c     | 24 +++++++++++++++++++-----
+ host/plat_host.c    | 34 +++++++++++++++++++++++++++++-----
+ tests/backup_test.c | 33 +++++++++++++++++++++++++++++++++
+ 3 files changed, 81 insertions(+), 10 deletions(-)
+
+diff --git a/device/backup.c b/device/backup.c
+index 47603c9..8b5053f 100644
+--- a/device/backup.c
++++ b/device/backup.c
+@@ -8,7 +8,8 @@
+  *   head  the app's magic (APP_BACKUP_MAGIC), u16 its version (APP_BACKUP_VERSION), u16 the count of objects,
+  *         u32 flags (bit 0: taken while playing, changes not yet saved left out), u32 CRC-32 of the 12 bytes before
+  *   the records, in APP_BACKUP_OBJS's order: u16 object id, u16 length, u32 CRC-32 of the payload, the payload
+- *         (length 0: the object absent; a restore makes it absent)
++ *         (length 0: the object absent; a restore makes it absent). An earlier version of the app may have saved
++ *         fewer: the first of APP_BACKUP_OBJS (it had no others), the count says so; a restore makes the rest absent
+  *   tail  u32 CRC-32 of everything before
+  * (CRC-32: zlib's, as storage.c's st_crc32)
+  *
+@@ -397,13 +398,13 @@ static int rs_commit(void)
+ static int restore_rx(uint32_t len, uint32_t crc, int *begun_out)
+ {
+     uint8_t hd[BU_HEAD];
+-    uint32_t c, pos, i, k;
++    uint32_t c, pos, i, k, n;
+     int rc = 0, begun = 0;
+     if (rs_playing()) {
+         rc = RS_E_PLAYING;
+         goto out;
+     }
+-    if (len < BU_HEAD + BU_NOBJ * BU_REC + 4u || len > BU_MAXIMG) {
++    if (len < BU_HEAD + BU_REC + 4u || len > BU_MAXIMG) {
+         rc = RS_E_SIZE;
+         goto out;
+     }
+@@ -411,17 +412,22 @@ static int restore_rx(uint32_t len, uint32_t crc, int *begun_out)
+         rc = RS_E_FETCH;
+         goto out;
+     }
+-    if (bu_rd32(hd) != BU_MAGIC || bu_rd16(hd + 4) != BU_VERSION || bu_rd16(hd + 6) != BU_NOBJ ||
++    n = bu_rd16(hd + 6);                              /* (fewer: an earlier version's backup) */
++    if (bu_rd32(hd) != BU_MAGIC || bu_rd16(hd + 4) != BU_VERSION || !n || n > BU_NOBJ ||
+         bu_rd32(hd + 12) != bu_crc(0, hd, 12)) {
+         rc = RS_E_HEAD;
+         goto out;
+     }
++    if (len < BU_HEAD + n * BU_REC + 4u) {
++        rc = RS_E_SIZE;
++        goto out;
++    }
+     rs_begin();
+     begun = 1;
+     rs_show(0);
+     c = bu_crc(0, hd, BU_HEAD);
+     pos = BU_HEAD;
+-    for (i = 0; i < BU_NOBJ; i++) {
++    for (i = 0; i < n; i++) {
+         rs_ent_t *e = &rs_rec.e[i];
+         uint8_t r[BU_REC];
+         if (rs_fetch(pos, r, BU_REC)) {
+@@ -454,6 +460,14 @@ static int restore_rx(uint32_t len, uint32_t crc, int *begun_out)
+             goto out;
+         rs_show((i + 1u) * 90u / BU_NOBJ);
+     }
++    for (; i < BU_NOBJ; i++) {                        /* the objects it did not have yet: absent */
++        rs_ent_t *e = &rs_rec.e[i];
++        e->obj = (uint16_t)bu_obj(i);
++        e->len = 0;
++        e->crc = bu_crc(0, bu_buf, 0);
++        if ((rc = rs_stage(e)) != 0)
++            goto out;
++    }
+     {
+         uint8_t t[4];
+         if (rs_fetch(pos, t, 4)) {
+diff --git a/host/plat_host.c b/host/plat_host.c
+index 1d6c1b7..510628a 100644
+--- a/host/plat_host.c
++++ b/host/plat_host.c
+@@ -45,7 +45,9 @@
+  *                                checked whole, every object replaced, everything reloaded; refused while playing
+  *                                (STOP FIRST) or when damaged: nothing changes (expect restore_rc: 0, 10 playing)
+  *   backup_damage FILE           (FM1B_BACKUP) a byte of a backup file changed (at its middle)
+- * FILE "out:NAME" for backup, restore, backup_damage and mirror: NAME in OUTDIR (fbdump: always there).
++ *   backup_trim FILE N           (FM1B_BACKUP) a backup file cut to its first N objects, as an earlier version of the
++ *                                app saved it (its count N, its CRCs made again): the rest absent at restore
++ * FILE "out:NAME" for backup, restore, backup_damage, backup_trim and mirror: NAME in OUTDIR (fbdump: always there).
+  * NAME_host --serve [OUTDIR] (FM1B_MIRROR): driven over stdin by a tool, as an FM-1 over USB:
+  *   sx HEX      one SysEx message from the host (F0 .. F7, hex): the mirror's requests (cmd 0x50, 0x54)
+  *   run MS      MS milliseconds of the device; then what it sent meanwhile, a line "sx HEX" a message, and "ok NOW"
+@@ -759,6 +761,7 @@ static int sim_backup(const char *path)
+ static int sim_restore(const char *path)          /* 0, or backup.c's RS_E_*: 10 playing, 3 the head, 4..6 damaged */
+ {
+     size_t n, pos = 16;
++    int k;                                        /* its objects (fewer: an earlier version's, the rest absent) */
+     FILE *f = fopen(path, "rb");
+     if (!f)
+         return 1;
+@@ -766,11 +769,12 @@ static int sim_restore(const char *path)          /* 0, or backup.c's RS_E_*: 10
+     fclose(f);
+     if (app_backup_playing())
+         return 10;                                /* STOP FIRST */
+-    if (n < 16u + (size_t)SIM_NOBJ * 8u + 4u || sim_rd32(sim_img) != APP_BACKUP_MAGIC ||
+-        (uint32_t)(sim_img[4] | sim_img[5] << 8) != APP_BACKUP_VERSION || sim_img[6] != SIM_NOBJ ||
++    k = n < 16u ? 0 : sim_img[6] | sim_img[7] << 8;
++    if (k < 1 || k > SIM_NOBJ || n < 16u + (size_t)k * 8u + 4u || sim_rd32(sim_img) != APP_BACKUP_MAGIC ||
++        (uint32_t)(sim_img[4] | sim_img[5] << 8) != APP_BACKUP_VERSION ||
+         sim_rd32(sim_img + 12) != sim_crc32(0, sim_img, 12))
+         return 3;
+-    for (int i = 0; i < SIM_NOBJ; i++) {          /* all checked before anything changes */
++    for (int i = 0; i < k; i++) {                 /* all checked before anything changes */
+         const uint8_t *r = sim_img + pos;
+         uint32_t len = r[2] | r[3] << 8;
+         if (pos + 8 + len + 4 > n || (uint32_t)(r[0] | r[1] << 8) != sim_objs[i] || len > PLAT_STORE_MAX)
+@@ -784,7 +788,7 @@ static int sim_restore(const char *path)          /* 0, or backup.c's RS_E_*: 10
+     pos = 16;
+     for (int i = 0; i < SIM_NOBJ; i++) {
+         const uint8_t *r = sim_img + pos;
+-        uint32_t o = sim_objs[i], len = r[2] | r[3] << 8;
++        uint32_t o = sim_objs[i], len = i < k ? (uint32_t)(r[2] | r[3] << 8) : 0u;
+         memcpy(store[o], r + 8, len);
+         store_len[o] = len ? (int)len : -1;       /* (an empty object: none, as storage.c's st_load) */
+         pos += 8 + len;
+@@ -1544,6 +1548,26 @@ int main(int argc, char **argv)
+                 fputc(ch ^ 1, bf);
+                 fclose(bf);
+             }
++        } else if (!strcmp(cmd, "backup_trim")) {     /* only a backup file's first N objects (an earlier version's) */
++            FILE *bf;
++            size_t n = 0, pos = 16;
++            int k = atoi(b);
++            out_path(out, sizeof out, dir, a);
++            if ((bf = fopen(out, "rb"))) {
++                n = fread(sim_img, 1, sizeof sim_img, bf);
++                fclose(bf);
++            }
++            if (n >= 16u && k >= 1 && k <= sim_img[6]) {
++                for (int i = 0; i < k; i++)
++                    pos += 8u + (size_t)(sim_img[pos + 2] | sim_img[pos + 3] << 8);
++                sim_img[6] = (uint8_t)k, sim_img[7] = 0;
++                sim_wr32(sim_img + 12, sim_crc32(0, sim_img, 12));
++                sim_wr32(sim_img + pos, sim_crc32(0, sim_img, pos));
++                if ((bf = fopen(out, "wb"))) {
++                    fwrite(sim_img, 1, pos + 4, bf);
++                    fclose(bf);
++                }
++            }
+ #endif
+         } else if (!strcmp(cmd, "echo"))
+             printf("%s", line + 5);
+diff --git a/tests/backup_test.c b/tests/backup_test.c
+index 1588976..851ae6e 100644
+--- a/tests/backup_test.c
++++ b/tests/backup_test.c
+@@ -456,6 +456,39 @@ int main(int argc, char **argv)
+         check("... saving after it works (the next seq)", st_load(OBJ_PAT0 + 3, now.d[0], 64) == 50 &&
+                                                          !memcmp(now.d[0], b, 50));
+     }
++    {   /* an earlier version's backup: its first 5 objects (it had no others); the slot saved just now made absent */
++        static uint8_t full[sizeof img];
++        uint32_t full_n = img_n, pos = BU_HEAD, k = 5;
++        int all;
++        memcpy(full, img, img_n);
++        for (uint32_t i = 0; i < k; i++)
++            pos += BU_REC + bu_rd16(img + pos + 2);
++        bu_wr16(img + 6, k);
++        bu_wr32(img + 12, bu_crc(0, img, 12));
++        bu_wr32(img + pos, bu_crc(0, img, pos));
++        img_n = pos + 4u;
++        rc = restore();
++        snap(&now);
++        all = rc == 0;
++        for (uint32_t i = 0; i < BU_NOBJ; i++)
++            all &= i < k ? (now.n[i] < 0) == (set_a.n[i] < 0) &&
++                               (now.n[i] <= 0 || (now.n[i] == set_a.n[i] && !memcmp(now.d[i], set_a.d[i], now.n[i])))
++                         : now.n[i] < 0;
++        check("an earlier version's backup (fewer): restored, the rest absent", all);
++        all = 1;
++        for (int j = 0; j < 2; j++) {
++            bu_wr16(img + 6, j ? 0u : BU_NOBJ + 1u);
++            bu_wr32(img + 12, bu_crc(0, img, 12));
++            bu_wr32(img + pos, bu_crc(0, img, pos));
++            snap(&set_b);
++            rc = restore();
++            snap(&now);
++            all &= rc == RS_E_HEAD && same(&now, &set_b);
++        }
++        check("... none, or more than the app has: RS_E_HEAD, nothing changed", all);
++        memcpy(img, full, full_n);
++        img_n = full_n;
++    }
+ 
+     /* ---- a power cut at every flash write: old or new after the boot, whole */
+     {

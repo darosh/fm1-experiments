@@ -1,7 +1,7 @@
 # fm1-experiments
 
 Scratch repo for M-VAVE FM-1 firmware experiments, maintained mostly by an LLM following this
-file. It pins thirteen upstream repositories at known revisions, keeps our changes as patch series, and
+file. It pins fourteen upstream repositories at known revisions, keeps our changes as patch series, and
 gives each firmware its own build, verify and deploy script.
 
 ## Contents
@@ -10,6 +10,7 @@ gives each firmware its own build, verify and deploy script.
 - [2. Build and deploy](#2-build-and-deploy)
   - [LOOM-8](#loom-8-fm1-loom)
   - [AMB-1](#amb-1-fm1-amb)
+  - [FRASIL](#frasil-frasil)
   - [fm1-base template](#fm1-base-template-the-base-template)
   - [Felucca](#felucca-hugeltonfelucca)
   - [ZEN-1](#zen-1-zen-1)
@@ -27,9 +28,11 @@ gives each firmware its own build, verify and deploy script.
 - [8. Troubleshooting](#8-troubleshooting)
 - [9. Recovery](#9-recovery)
 
-Eleven firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
-**AMB-1** ([fm1-amb](https://github.com/charlesvestal/fm1-amb)) sit on the shared fm1-base; fm1-base's
-own **template** firmware is built too, as the platform's reference app. **Felucca**
+Twelve firmwares are built here. **LOOM-8** ([fm1-loom](https://github.com/charlesvestal/fm1-loom)) and
+**AMB-1** ([fm1-amb](https://github.com/charlesvestal/fm1-amb)) sit on the shared fm1-base, and so does
+**FRASIL** ([frasil](https://github.com/styvesgoupil/frasil)), an ambient drone instrument that names
+its author's fm1-base fork but builds against our shared clone. fm1-base's own **template** firmware
+is built too, as the platform's reference app. **Felucca**
 ([Felucca](https://github.com/hugelton/Felucca)) is standalone: it carries its own platform under
 `firmware/` and does not use fm1-base or felucca-bsp. **ZEN-1** ([zen-1](https://github.com/aceyprime/zen-1))
 is standalone too, on FoMni's older copy of the Felucca platform (vendored, no submodules).
@@ -141,9 +144,9 @@ Flash (`--info` prints the connected FM-1's identity and writes nothing):
 
 `build-loom.sh` passes its arguments to `fm1-loom/build.sh`: `--host` (host simulator), `--web`
 (browser emulator), `--demo` (mirroring for demos), `--release X.Y`, `--no-ble`. v0.9's `fm1.toml`
-turns Bluetooth MIDI, Bluetooth audio and the USB MIDI host on in the default build (`--no-ble`
-builds `loom-usb.fwsc` without the radio); the image is 524260 B, with 93520 B of RAM used and
-the pool 335460 B of 344064.
+(unchanged in v0.9.3) turns Bluetooth MIDI, Bluetooth audio and the USB MIDI host on in the default
+build (`--no-ble` builds `loom-usb.fwsc` without the radio); v0.9's image was 524260 B, with 93520 B
+of RAM used and the pool 335460 B of 344064 (v0.9.3 has no device build in this tree yet).
 
 ### AMB-1 (fm1-amb)
 
@@ -167,6 +170,36 @@ Flash (`--info` prints the connected FM-1's identity and writes nothing):
 
 `build-amb.sh` passes `--host`, `--web`, `--release X.Y` (no `--demo`/`--no-ble`: AMB-1 has no
 radio).
+
+### FRASIL (frasil)
+
+Build; writes `clones/frasil/app/build/frasil-<VERSION>.fwsc` (2.0.1 at the pin; the version comes
+from frasil's `VERSION` unless `--release X.Y` names another):
+
+```sh
+./scripts/build-frasil.sh
+```
+
+Host checks (the instrument, scenes, MIDI and backup/restore, then the built image's USB
+descriptors):
+
+```sh
+./scripts/build-frasil.sh --host && ./scripts/verify-frasil.sh
+```
+
+Flash (`--info` prints the connected FM-1's identity and writes nothing):
+
+```sh
+./scripts/deploy-frasil.sh
+```
+
+`build-frasil.sh` passes `--host`, `--web` and `--release X.Y` to frasil's own `build.sh`. Its
+`base/` submodule names the author's fm1-base fork; `setup.sh` replaces it with a symlink to our
+fm1-base, like LOOM-8 and AMB-1. That fork's `frasil` branch carries two backup commits our pin does
+not (the app draws the restore question and chooses its buttons; an earlier backup with fewer
+objects restores), which `patches/fm1-base/10-backup-restore` brings onto our base. `verify-frasil.sh`
+runs frasil's `app/tests/basic.txt` and `boot.txt`, then checks `app/build/frasil.bin` with
+`lib/usb_desc.py`; the descriptor check is skipped until a firmware build has made the `.bin`.
 
 ### fm1-base template (the base template)
 
@@ -470,9 +503,10 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 
 | repo | commit | role |
 |---|---|---|
-| `charlesvestal/fm1-loom` | `452d822` (v0.9) | LOOM-8 |
+| `charlesvestal/fm1-loom` | `92b4bf2` (v0.9.3) | LOOM-8 |
 | `charlesvestal/fm1-amb` | `188b0a42` (v1.3) | AMB-1 |
-| `charlesvestal/fm1-base` | `d0133c2` (own-bt) | the platform layer (both firmwares' `base`) |
+| `styvesgoupil/frasil` | `422cac6` (v2.0.1) | FRASIL |
+| `charlesvestal/fm1-base` | `d0133c2` (own-bt) | the platform layer (all three fm1-base firmwares' `base`) |
 | `hugelton/felucca-bsp` | `305c372` (own-bt) | the chip layer (`fm1-base/bsp`) |
 | `hugelton/Felucca` | `63f88ec` | Felucca (main, 5 commits past v1.6.1) |
 | `hugelton/Felucca-Engines` | `c46e008` | Felucca's `firmware/engines` submodule |
@@ -489,23 +523,24 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 | docker base | `debian:bookworm-slim@sha256:7ff6ba3…` | the build container's image, `JIELI_DOCKER_IMAGE` |
 | python | `mido 1.3.3`, `python-rtmidi 1.5.8`, `fonttools 4.66.1`, `numpy 2.5.4`, `scipy 1.18.1` | `.venv`, installed by `setup.sh` |
 
-The repos are pinned to their latest `main` (LOOM-8, AMB-1, ZEN-1, Melodee and Mutable Dreams are
-at their latest release tag; TONITOR, SLOOP, Dinghy and CS-1 have none, so their pins are their
-latest main commits). The two exceptions are LOOM-8's platform pins: fm1-loom v0.9 moves to
+The repos are pinned to their latest `main` (LOOM-8, AMB-1, FRASIL, ZEN-1, Melodee and Mutable
+Dreams are at their latest release tag; TONITOR, SLOOP, Dinghy and CS-1 have none, so their pins are
+their latest main commits). The exceptions are LOOM-8's platform pins: fm1-loom v0.9.x moves to
 Optimist's own Bluetooth stack, and its base submodule names fm1-base's `own-bt` branch (`d0133c2`,
 15 commits past `main`) whose bsp submodule names felucca-bsp's `own-bt` branch (`305c372`, 6 commits
-past `main`). Those two branches merge `main` and carry the radio drivers and `bt/` sources v0.9
+past `main`). Those two branches merge `main` and carry the radio drivers and `bt/` sources v0.9.x
 needs, so they are pinned instead of `main`. ZEN-1's two `fm1-fomni` rows are not
 clones: `setup.sh` fetches them by SHA into `clones/zen-1` for its platform guard, because they are
 not on any branch of that repository. Mutable Dreams' pin is two things: the v1.1 commit that
 publishes the release (and its checksums), and the SHA-256 of the source archive that commit
 carries (the repository has no source tree of its own).
-One fm1-base and one felucca-bsp are shared by both fm1-base firmwares. AMB-1 v1.3's submodule
-names fm1-base `934e40d` (an ancestor of the pinned `own-bt` tip); LOOM-8 v0.9 names `d0133c2`, the
-pin itself. Felucca-Engines is pinned to the commit Felucca's own tree
-names, not to engines `main`: engines `main` adds the PHASE engine and an FS-rate refactor, while
-Felucca has its own `firmware/src/eng_phase.c` and goldens that pair with the older sources. The SDK
-tag and the toolchain package are the newest published.
+One fm1-base and one felucca-bsp are shared by all three fm1-base firmwares. AMB-1 v1.3's submodule
+names fm1-base `934e40d` (an ancestor of the pinned `own-bt` tip); LOOM-8 v0.9.3 names `d0133c2`, the
+pin itself; FRASIL names styvesgoupil/fm1-base's `frasil` branch (`5da1f3d`), an older fm1-base plus
+the two backup commits `patches/fm1-base/10-backup-restore` adds. Felucca-Engines is pinned to the
+commit Felucca's own tree names, not to engines `main`: engines `main` adds the PHASE engine and an
+FS-rate refactor, while Felucca has its own `firmware/src/eng_phase.c` and goldens that pair with the
+older sources. The SDK tag and the toolchain package are the newest published.
 
 `./scripts/check-upstream.sh` reports which of these have moved since they were pinned, and by how
 many commits (§6).
@@ -519,6 +554,8 @@ clones/                      ignored; scripts/setup.sh creates it
   fm1-loom/                  pinned checkout, branch "experiments"
     base -> ../fm1-base      symlink
   fm1-amb/                   pinned checkout, branch "experiments"
+    base -> ../fm1-base      symlink
+  frasil/                    pinned checkout, branch "experiments"
     base -> ../fm1-base      symlink
   fm1-base/                  pinned checkout, branch "experiments"
     bsp -> ../felucca-bsp    symlink
@@ -542,6 +579,7 @@ scripts/
   check-upstream.sh          what each pin is missing from upstream's default branch (§6)
   build-loom.sh   deploy-loom.sh   verify-loom.sh
   build-amb.sh    deploy-amb.sh    verify-amb.sh
+  build-frasil.sh deploy-frasil.sh verify-frasil.sh
   build-template.sh  deploy-template.sh  verify-base.sh
   build-felucca.sh   deploy-felucca.sh   verify-felucca.sh
   build-zen1.sh      deploy-zen1.sh      verify-zen1.sh
@@ -588,6 +626,8 @@ patches/
                                     Bluetooth-only build
   fm1-base/09-model-change-fade/    build.py: forward MODEL_CHANGE_FADE, and give the host's and the
                                     web's o2 units opt_flags() (dsp/synth.c is an o2 unit)
+  fm1-base/10-backup-restore/       backup.c, unity.c, plat.h: the app chooses and draws the restore
+                                    question, and a backup with fewer objects (an earlier app) restores
   fm1-loom/01-usb-host-compat/      LOOM-8's USB names and its descriptor flags
   fm1-loom/02-mixed-text-blend/     gfx_loom.c: the same MIXED blend, behind MIXED_RENDERING=1
   fm1-loom/04-model-change-fade/    braids.h: a model turned mid-note, behind MODEL_CHANGE_FADE
@@ -597,6 +637,7 @@ patches/
                                     longer keeps it), and letting the step go closes the list
                                     instead of switching it to the pattern's (§7, bugs 4-5)
   fm1-amb/01-usb-host-compat/       AMB-1's: the same descriptor set, and its USB names
+  frasil/01-usb-host-compat/        FRASIL's: the same descriptor set, and its USB names
   felucca/01-usb-host-compat/       usb.c: MIDI behind the streams, the audio IAD, a serial; descriptor test
   felucca/02-sdk-v1.2.14/           build.py: the SDK hashes of the installed V1.2.14
   felucca/03-symlinked-engines/     build.py: the container mount covers a symlinked engines submodule
@@ -625,11 +666,15 @@ patches/
   authorship survive and applied work shows up as commits on the `experiments` branch.
 - The `NN-` prefix on the problem directory defines order. It matters: most of fm1-base's patches
   touch `tools/build.py` and must apply in this order.
-- The fm1-base patches are shared by both firmwares (one base clone); the fm1-amb patch turns the
-  same `usb_midi_last`/`usb_iad` on in AMB-1's `fm1.toml`, so both firmwares present the same
-  descriptor set.
+- The fm1-base patches are shared by all three fm1-base firmwares (one base clone); the fm1-amb
+  and frasil patches turn the same `usb_midi_last`/`usb_iad` on in their `fm1.toml`, so all three
+  present the same descriptor set. `10-backup-restore` is opt-in: it adds the `APP_BACKUP_YES`,
+  `APP_BACKUP_NO` and `APP_BACKUP_ASK` hooks, and a backup with fewer objects restores; an app that
+  names none of them builds and behaves exactly as before.
 - `setup.sh` skips a patch whose reverse applies cleanly (already applied), applies it if it
-  applies cleanly, and stops with the patch name if neither is true.
+  applies cleanly, and stops with the patch name if neither is true. When a later patch edited the
+  same lines (05 and 09 both touch `opt_flags()`), the reverse check no longer matches; a patch
+  whose `git am` subject is already in the clone's log then counts as applied too.
 - The two `mixed-text-blend` patches are build-time options, not the default: with
   `MIXED_RENDERING=1` in the environment, `build.py` adds `-DMIXED_RENDERING=1` for the device,
   the host and the web, and the partial-coverage blend remaps light ink on a darker pixel for
@@ -699,7 +744,10 @@ pointer and fm1-base follows its own `main`, not either firmware's (`§3` has ea
 
 ### Dependency chain
 
-`fm1-loom` → `base/` (fm1-base) → `bsp/` (felucca-bsp), and the same for `fm1-amb`. The macOS/USB
+`fm1-loom` → `base/` (fm1-base) → `bsp/` (felucca-bsp), and the same for `fm1-amb` and `frasil`.
+FRASIL's own tree names styvesgoupil/fm1-base's `frasil` branch, but `setup.sh` links our fm1-base
+instead; the two backup commits that branch adds over our pin are `patches/fm1-base/10-backup-restore`.
+The macOS/USB
 code lives in `bsp/chip/usb.c`, so one fix there reaches LOOM-8, AMB-1, the template and anything
 else on the bsp.
 
@@ -774,7 +822,7 @@ never bisected them. We did, on macOS 15.8.1:
 **Moving the MIDI function behind the streaming interfaces is what fixes it.** The collection
 change alone is necessary-but-not-sufficient, and it moves with the ordering anyway (once MIDI
 leaves the audio function it must leave the collection). Implemented as `FELUCCA_UAC_MIDI_LAST`,
-enabled through `usb_midi_last` in `fm1.toml`; both fm1-base firmwares turn it on, and Felucca,
+enabled through `usb_midi_last` in `fm1.toml`; all three fm1-base firmwares turn it on, and Felucca,
 ZEN-1, TONITOR, SLOOP, Dinghy and CS-1 export it from their build scripts, and Mutable Dreams sets
 it in its vendored `base/device/unity.c` (Melodee does not need it: its MIDI is a function of its
 own — see below). TONITOR 0.55, SLOOP 2.7.2 and Felucca
@@ -794,7 +842,7 @@ order `AC, MIDI, AS`. That is variant C above plus the old order — and a stock
 audio input does not appear on macOS 15 (tested on the device). Its own MENU > USB SERIAL OFF, which
 re-enumerates as a plain audio + MIDI device (`FELUCCA_CDC=0`'s descriptors), does not help either,
 for the same reason: it keeps the old order. felucca-bsp carries the same `FELUCCA_UAC_AS_FIRST`
-(PR #10) and fm1-base exposes it as `usb_audio_first`; LOOM-8 v0.9's `fm1.toml` asks for it. Our
+(PR #10) and fm1-base exposes it as `usb_audio_first`; LOOM-8 v0.9.3's `fm1.toml` asks for it. Our
 descriptor patch still sets `FELUCCA_UAC_MIDI_LAST` alongside it: when MIDI_LAST is on, the AC
 collection lists only the streams and AS_FIRST's ordering is moot, so the build remains variant A.
 
@@ -933,7 +981,8 @@ branch is reached; `list_move()` (`lst.open`) never sees it. The lock editor and
 open at once, and the list did not take precedence.
 
 Fix: `patches/fm1-loom/05-step-sel-list`, first commit — the page cycle yields while a list is
-open, and resumes when the list closes (the held step and EDIT are untouched).
+open, and resumes when the list closes (the held step and EDIT are untouched). v0.9.3 reworked the
+SEL lists around this, but the page cycle still takes SELECT first; the patch applies unchanged.
 
 Repro on the FM-1:
 1. Steps page, a track with a note on a step.
@@ -958,7 +1007,8 @@ every draw. Releasing the last held step cleared `ui.held`, `ui.lockpg` and `ui.
 `lst.open` set, so the next repaint built the pattern list.
 
 Fix: the second commit of the same patch — the last step's release closes the list (with more
-steps still held the list stays, on the one left, as before).
+steps still held the list stays, on the one left, as before). v0.9.3 changed the surrounding
+`key_up()` lines (several steps held, `ui.held_multi`), so that commit was regenerated against it.
 
 Repro on the FM-1:
 1. Steps page, hold a step's key and tap SEL. The step's menu opens.

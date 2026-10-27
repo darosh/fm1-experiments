@@ -1,0 +1,90 @@
+From 60b853e6aef311e53c9c131e610a29aa317ec000 Mon Sep 17 00:00:00 2001
+From: Styves Goupil <styves.goupil@gmail.com>
+Date: Fri, 23 Oct 2026 20:51:56 -0400
+Subject: [PATCH 1/2] Backup: the app may choose the restore question's two
+ buttons and draw it
+
+app.h APP_BACKUP_YES / APP_BACKUP_NO (and their _NAME): the buttons that answer (SEL and HOME by default); they are
+the only lights on while the question waits. APP_BACKUP_ASK: the app draws the question itself
+(app_backup_ask_screen), else the same lines as before, with the buttons' names.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+---
+ device/backup.c |  3 ++-
+ device/unity.c  | 26 +++++++++++++++++++++-----
+ include/plat.h  |  3 +++
+ 3 files changed, 26 insertions(+), 6 deletions(-)
+
+diff --git a/device/backup.c b/device/backup.c
+index 79fa057..47603c9 100644
+--- a/device/backup.c
++++ b/device/backup.c
+@@ -28,7 +28,8 @@
+  *      erased, the payload programmed, read back and checked) WITHOUT its header: storage.c's header is the commit
+  *      record of a copy, so a copy without one does not exist for st_load: the current set stays in charge;
+  *   3. everything received and verified (a cut cable, a changed byte, a refused write: stops here, nothing changed):
+- *      asks on the screen, RESTORE FROM USB? SEL yes / HOME no (60 s: no), stopped only;
++ *      asks on the screen, RESTORE FROM USB? SEL yes / HOME no (60 s: no; the app may choose the two buttons and
++ *      draw the question: app.h APP_BACKUP_YES, APP_BACKUP_NO, APP_BACKUP_ASK), stopped only;
+  *   4. yes: commits. A journal record (RS_REC, in the update's staging area, unused but by an update) lists the
+  *      headers to write; written and read back first, then the headers, then the record erased. A power loss after
+  *      the record is valid is finished at the next boot (rs_boot: the headers written again, idempotent on NOR);
+diff --git a/device/unity.c b/device/unity.c
+index fe745cf..cf70ea6 100644
+--- a/device/unity.c
++++ b/device/unity.c
+@@ -315,19 +315,35 @@ static void rs_show(uint32_t pct)
+     sys_box(0, 92, 240, SYS_S, "RESTORE", C_WHITE, 1);
+     sys_box(0, 124, 240, SYS_S, b, C_HI, 1);
+ }
+-static int rs_ask(void)                             /* SEL yes, HOME no; playing or 60 s: no. The hand's buttons only */
++/* the question's two buttons (app.h APP_BACKUP_YES, APP_BACKUP_NO: SEL and HOME unless the app says), the only lights
++ * on while it waits; its screen the app's if it draws one (APP_BACKUP_ASK: app_backup_ask_screen), else these lines */
++#ifndef APP_BACKUP_YES
++#define APP_BACKUP_YES B_SEL
++#define APP_BACKUP_YES_NAME "SEL"
++#endif
++#ifndef APP_BACKUP_NO
++#define APP_BACKUP_NO B_HOME
++#define APP_BACKUP_NO_NAME "HOME"
++#endif
++static int rs_ask(void)                             /* yes, no; playing or 60 s: no. The hand's buttons only */
+ {
+     uint32_t t0 = fm1_ms, was = plat_buttons() & ~mirror_in_buttons() & ~remote.btn;
+-    rs_screen("RESTORE FROM USB?", "SEL yes   HOME no");
++#ifdef APP_BACKUP_ASK
++    app_backup_ask_screen();
++#else
++    rs_screen("RESTORE FROM USB?", APP_BACKUP_YES_NAME " yes   " APP_BACKUP_NO_NAME " no");
+     sys_box(0, 156, 240, SYS_S, APP_BACKUP_WHAT, C_GRAY, 1);
+-    ann_say("Restore from USB? It " APP_BACKUP_WHAT ". SEL: yes. HOME: no.", 0, ANN_NOW | ANN_KEEP);
++#endif
++    plat_lights(1u << APP_BACKUP_YES | 1u << APP_BACKUP_NO, 0, 0, 0, 0);
++    ann_say("Restore from USB? It " APP_BACKUP_WHAT ". " APP_BACKUP_YES_NAME ": yes. " APP_BACKUP_NO_NAME ": no.", 0,
++            ANN_NOW | ANN_KEEP);
+     while (fm1_ms - t0 < 60000u) {
+         uint32_t b = plat_buttons() & ~mirror_in_buttons() & ~remote.btn, down = b & ~was;
+         fm1_wdt_feed();
+         was = b;
+-        if (down >> B_SEL & 1u)
++        if (down >> APP_BACKUP_YES & 1u)
+             return 1;
+-        if ((down >> B_HOME & 1u) || rs_playing())
++        if ((down >> APP_BACKUP_NO & 1u) || rs_playing())
+             return 0;
+     }
+     return 0;
+diff --git a/include/plat.h b/include/plat.h
+index 772a7c2..8ec808c 100644
+--- a/include/plat.h
++++ b/include/plat.h
+@@ -306,6 +306,9 @@ uint32_t plat_cpu2_stack(void);        /* how deep its stack (2816 B) has gone,
+  *   APP_BACKUP_OBJS {OBJ_PROJ, ...}   the objects, in order (not OBJ_PANEL: the calibration is the unit's)
+  *   APP_BACKUP_MAGIC 0x...u           its image's magic (4 ASCII bytes, little-endian), APP_BACKUP_VERSION its format
+  *   APP_BACKUP_WHAT "replaces all songs"   the restore question's second line
++ *   APP_BACKUP_YES B_SEL, APP_BACKUP_YES_NAME "SEL"; APP_BACKUP_NO B_HOME, APP_BACKUP_NO_NAME "HOME"   its two buttons
++ *                                     (these by default), the only lights on while it waits
++ *   APP_BACKUP_ASK                    the app draws the question itself: void app_backup_ask_screen(void)
+  * and these: int app_backup_playing(void) (1: no restore now, STOP FIRST), void app_backup_flush(void) (what is not
+  * saved yet, saved: a backup starts), void app_backup_hold(int on) (no saving while a backup streams),
+  * void app_backup_restored(void) (everything from the flash again) */
