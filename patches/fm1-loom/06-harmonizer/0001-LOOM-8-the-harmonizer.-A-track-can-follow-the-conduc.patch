@@ -1,0 +1,776 @@
+From 96c3c142178907586356002f7e3ca5dac30cea9e Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Tue, 27 Oct 2026 23:41:32 +0100
+Subject: [PATCH] LOOM-8: the harmonizer. A track can follow the conductor's
+ chord, not just its scale: the conductor now keeps the chord its keys, its
+ steps or a FOLLOW track play (up to four notes, packed in one word the
+ interrupt reads whole), and the new follow modes "harmony" (each note snaps
+ to the nearest chord tone, register kept, ties down) and "chord deg" (the
+ note's place in the scale picks the chord tone, kept in its octave) take
+ their pitches from it. A single-note source is its diatonic triad; a scene
+ re-derives the triad from its degree; no chord falls back to diatonic. Fills
+ keep their chord tones. Five follow modes in the SEL lists and the routing
+ page (a bar marks the harmonizer's), the active chord shown on the
+ conductor's Engine page. No format change: the two modes are appended values
+ of TP_BRAIN. harmony.xy; t_harmony; the manual
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>
+---
+ app/dsp/synth.c               |   4 +-
+ app/dsp/synth.h               |   7 +-
+ app/pages.c                   |  38 +++++--
+ app/seq/seq.c                 | 192 ++++++++++++++++++++++++++++------
+ app/seq/seq.h                 |   2 +
+ app/ui.c                      |   4 +-
+ app/web/words/12821997f8.json |   1 +
+ app/web/words/f4a5493b52.json |   1 +
+ app/words.tsv                 |   3 +
+ base                          |   2 +-
+ docs/MANUAL.md                |  35 ++++---
+ tests/host/seq_test.c         |  94 +++++++++++++++++
+ tests/scenarios/harmony.xy    |  31 ++++++
+ 13 files changed, 355 insertions(+), 59 deletions(-)
+ create mode 100644 app/web/words/12821997f8.json
+ create mode 100644 app/web/words/f4a5493b52.json
+ mode change 160000 => 120000 base
+ create mode 100644 tests/scenarios/harmony.xy
+
+diff --git a/app/dsp/synth.c b/app/dsp/synth.c
+index 089b519..6bc4874 100644
+--- a/app/dsp/synth.c
++++ b/app/dsp/synth.c
+@@ -91,7 +91,7 @@ static const char *const ARPSTY_N[6] = {"off", "pedal", "thirds", "double", "ski
+ static const char *const ARPGLD_N[3] = {"off", "low", "high"};
+ static const char *const ARPSTE_N[3] = {"mono", "narrow", "wide"};
+ static const char *const MPAT_N[4] = {"up", "down", "updown", "random"};
+-static const char *const BRAIN_N[3] = {"no", "diatonic", "transp"};
++static const char *const BRAIN_N[NBM] = {"no", "diatonic", "transp", "harmony", "ch. deg"};
+ static const char *const BEND_N[9] = {"off", "1", "2", "3", "4", "5", "6", "7", "octave"};
+ static const char *const WTNAME_N[WT_NTABLE] = {"shapes", "nasal", "grit", "vocal", "spiral", "fold", "octaves",
+                                                 "glass", "chirp"};
+@@ -3014,7 +3014,7 @@ static const tp_info_t FIXED[NTP_SOUND + 13] = {
+     {"hold", 0, 1, 0, PK_SWITCH, 0},                    {"length", 0, 2, 1, PK_NAMES, ARPLEN_N},
+     {"style", 0, 5, 0, PK_NAMES, ARPSTY_N},             {"glide", 0, 2, 0, PK_NAMES, ARPGLD_N},
+     {"stereo", 0, 2, 0, PK_NAMES, ARPSTE_N},            {"level", 0, 127, 100, PK_FADER, 0},
+-    {"pan", 0, 127, 64, PK_BIP, 0},                     {"follow", 0, 2, 1, PK_NAMES, BRAIN_N},
++    {"pan", 0, 127, 64, PK_BIP, 0},                     {"follow", 0, NBM - 1, 1, PK_NAMES, BRAIN_N},
+     {"midi out", 0, 1, 1, PK_SWITCH, 0}};
+ /* a drumline key's values (synth.h DP_*); its model's knobs take their names and defaults from drumline.c
+  * (tp_info_par). The key's envelope and filter: its Envelope and Filter pages */
+diff --git a/app/dsp/synth.h b/app/dsp/synth.h
+index f16c185..dfcd67a 100644
+--- a/app/dsp/synth.h
++++ b/app/dsp/synth.h
+@@ -83,7 +83,8 @@ enum {
+     TP_PLAYER, TP_P1, TP_P2, TP_P3, TP_P4,          /* Players: off / arp / strum / hold and its four knobs */
+     TP_AP1, TP_AP2, TP_AP3, TP_AP4,                 /* the arp's second page: length, style, glide, stereo */
+     TP_LEVEL, TP_PAN,                               /* Mix */
+-    TP_BRAIN,                                       /* follows the brain: 0 no, 1 diatonic, 2 transpose only */
++    TP_BRAIN,                                       /* follows the brain: BM_* (0 no, 1 diatonic, 2 transpose only,
++                                                     * 3 harmony, 4 chord degree) */
+     TP_CHAN,                                        /* MIDI OUT: 0 off, 1 on (on the track's own channel) */
+     TP_DRUM0,                                       /* the drum kit: NDRUM keys * DP_N */
+     TP_DRUMX0 = TP_DRUM0 + 11 * DP_N,               /* the keys' second page of model knobs (a model with eight:
+@@ -95,6 +96,10 @@ enum {
+     NTP
+ };
+ _Static_assert(NTP <= 511, "a parameter's index: nine bits in the engine's queue (engine.c cq_put); a lane's is 16");
++/* how a track follows the conductor (TP_BRAIN): 0 and 1..2 are saved before the harmonizer and keep their meaning;
++ * 3 and 4 are appended (append only: a project stores the byte). 3 "harmony" takes each note to the nearest tone of
++ * the active chord; 4 "ch. deg" takes the note's place in the scale to pick a chord tone. See seq.c brain_note */
++enum { BM_NO, BM_DIATONIC, BM_TRANSPOSE, BM_HARMONY, BM_DEGREE, NBM };
+ #define TP_DRUM(s, k) (TP_DRUM0 + (s) * DP_N + (k))
+ #define DPX_N 4                                      /* knobs 5..8 of a key's model */
+ #define TP_DRUMX(s, j) (TP_DRUMX0 + (s) * DPX_N + (j))
+diff --git a/app/pages.c b/app/pages.c
+index 22e7ee1..6916bbe 100644
+--- a/app/pages.c
++++ b/app/pages.c
+@@ -153,7 +153,7 @@ static const char *const CLOCK_ROW[SEQ_NCLK] = {"internal", "sends", "receives"}
+ static const char *const METRO_NAME[3] = {"off", "rec", "on"};
+ static const char *const ONOFF[2] = {"off", "on"};
+ static const char *const LINK_NAME[9] = {"off", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8"};
+-static const char *const FOLLOW_NAME[3] = {"no", "diatonic", "transpose"};
++static const char *const FOLLOW_NAME[NBM] = {"no", "diatonic", "transpose", "harmony", "ch. deg"};
+ static const char *const CORE2_NAME[4] = {"one core", "two cores", "lost", "barred"};
+ static const char *const USBA_NAME[2] = {"follows knob", "full"};
+ static const char *const BRAIN_KNOB[3] = {"key", "scale", "link"};
+@@ -2328,7 +2328,7 @@ static void list_sound(int trk)
+         list_head("follow");
+         for (int t = 0; t < NTRK; t++) {
+             s_cat(num_s((uint32_t)t + 1u, s_cat(nm[t], "T")), " FOLLOWS");
+-            list_add(nm[t], FOLLOW_NAME[proj.trk[t].par[TP_BRAIN] % 3], LK_PICK, A_FOLLOW);
++            list_add(nm[t], FOLLOW_NAME[proj.trk[t].par[TP_BRAIN] % NBM], LK_PICK, A_FOLLOW);
+         }
+     } else if (is_fx(trk)) {
+         list_add(ACTION_NAME[A_EFFECT], fx_label(ui.pick_fx % NFXPICK), LK_PICK, A_EFFECT);
+@@ -2372,7 +2372,7 @@ static void list_sound(int trk)
+             num_s((uint32_t)sc + 1u, s_cat(from_t, "from T"));
+             list_add(ACTION_NAME[A_PASTE_SOUND], from_t, LK_ACTION, A_PASTE_SOUND);
+         }
+-        s_cat(fol_t, FOLLOW_NAME[proj.trk[trk].par[TP_BRAIN] % 3]);
++        s_cat(fol_t, FOLLOW_NAME[proj.trk[trk].par[TP_BRAIN] % NBM]);
+         list_add(ACTION_NAME[A_FOLLOW], fol_t, LK_PICK, A_FOLLOW);
+         if (is_midi(trk)) {                          /* its knobs' CCs (its notes always go out: no MIDI OUT) */
+             list_head("MIDI");
+@@ -3741,8 +3741,10 @@ static void draw_brain(void)
+ {
+     const uint8_t *p = proj.trk[AUX_BRAIN].par;
+     int key = seq.brain_key % 12, sc = seq.brain_scale % NBS, deg = (int8_t)seq.brain_deg, src = p[TP_E1] % 9u;
+-    uint32_t h = hash_u(hash_u(2166136261u, 0xB0u), (uint32_t)key | (uint32_t)sc << 4 | (uint32_t)(deg + 64) << 8 |
+-                                          (uint32_t)src << 16 | (uint32_t)ui.page << 20 | (uint32_t)p[TP_E4] << 26);
++    uint32_t chord = seq.brain_chord;
++    uint32_t h = hash_u(hash_u(hash_u(2166136261u, 0xB0u), (uint32_t)key | (uint32_t)sc << 4 |
++                                          (uint32_t)(deg + 64) << 8 | (uint32_t)src << 16 | (uint32_t)ui.page << 20 |
++                                          (uint32_t)p[TP_E4] << 26), chord);
+     char t[48], *e;
+     for (int i = 0; i < NTRK; i++)
+         h = hash_u(h, proj.trk[i].par[TP_BRAIN] | (uint32_t)is_drum(i) << 4);
+@@ -3764,7 +3766,7 @@ static void draw_brain(void)
+             s_cat(s_cat(t, TRACK_NAME[src - 1]), " is a kit: it has no notes");
+             cv_text(12, 40, &FONT_XS, t, K_REC);
+         } else {
+-            s_cat(s_cat(t, TRACK_NAME[src - 1]), "'s lowest note sets the chord:");
++            s_cat(s_cat(t, TRACK_NAME[src - 1]), "'s notes set the chord:");
+             cv_text(12, 34, &FONT_XS, t, K_DIM);
+             cv_text(12, 48, &FONT_XS, "chords, a bass line; it follows nothing", K_DIM);
+         }
+@@ -3774,26 +3776,42 @@ static void draw_brain(void)
+             e = s_cat(e, "+");
+         num_i(deg, e);
+         cv_text(12, 44, &FONT_B, t, deg ? K_NOW : K_DIM);
++        if (chord) {                         /* the active chord: the tones the harmonizer plays */
++            char cb[24];
++            char *q = cb;
++            *q = 0;
++            for (int i = 0; i < SN; i++) {
++                int v = (int)(chord >> (8 * i) & 0xFFu);
++                if (!v)
++                    continue;
++                if (q != cb)
++                    q = s_cat(q, " ");
++                q = s_cat(q, NOTE_NAME[v % 12]);
++            }
++            text_r(230, 44, &FONT_XS, cb, K_FAINT);
++        }
+         if (p[TP_E4])
+             text_r(230, 48, &FONT_XS, LINK_NAME[p[TP_E4] % 9], K_DIM), text_r(230 - text_w(&FONT_XS, LINK_NAME[p[TP_E4] % 9]) - 4, 48, &FONT_XS, "link", K_FAINT);
+     }
+     cv_text(12, 70, &FONT_XS, src ? "tracks that follow; the chords' in its colour" : "tracks that follow", K_DIM);
+     for (int i = 0; i < NTRK; i++) {
+         int32_t x = 12 + i * 27;
+-        int m = proj.trk[i].par[TP_BRAIN] % 3;
++        int m = proj.trk[i].par[TP_BRAIN] % NBM;
+         num_s((uint32_t)i + 1u, t);
+         if (src == i + 1) {                          /* the FOLLOW track: the chords come from it */
+             cv_round(x, 86, 22, 22, 5, trk_ink(i));
+             text_c(x + 11, 90, &FONT_B, t, K_BG);
+             continue;
+         }
+-        if (m == 1)
++        if (m == BM_DIATONIC || m == BM_HARMONY)
+             cv_round(x, 86, 22, 22, 5, K_TEXT);
+-        else if (m == 2)
++        else if (m == BM_TRANSPOSE || m == BM_DEGREE)
+             cv_frame(x, 86, 22, 22, 5, K_TEXT, K_BG);
+         else
+             cv_frame(x, 86, 22, 22, 5, K_LINE, K_BG);
+-        text_c(x + 11, 90, &FONT_B, t, m == 1 ? K_BG : m == 2 ? K_TEXT : K_FAINT);
++        if (m >= BM_HARMONY)                          /* the harmonizer's modes: a bar under the number */
++            cv_rect(x + 6, 104, 10, 2, m == BM_HARMONY ? K_BG : K_TEXT);
++        text_c(x + 11, 90, &FONT_B, t, m == BM_DIATONIC || m == BM_HARMONY ? K_BG : m ? K_TEXT : K_FAINT);
+     }
+     cv_blit(0, MAIN_Y);
+ }
+diff --git a/app/seq/seq.c b/app/seq/seq.c
+index eedae27..bc75411 100644
+--- a/app/seq/seq.c
++++ b/app/seq/seq.c
+@@ -503,12 +503,120 @@ static int brain_src(const seq_t *s) { return s->brain_src >= 1 && s->brain_src
+ /* a track follows: routed, and not the track the chords come from (it would move itself) */
+ static int brain_follows(const seq_t *s, int t) { return t < NTRK && s->par[t][TP_BRAIN] && t != brain_src(s); }
+ 
++/* ------------------------------------------------------- the chord --- */
++/* the active chord is up to SN notes packed in one word, ascending, 0 = none (seq.h brain_chord) */
++static int chord_n(uint32_t w)
++{
++    int n = 0;
++    for (int i = 0; i < SN; i++)
++        n += (w >> (8 * i) & 0xFFu) != 0u;
++    return n;
++}
++static uint32_t chord_word(const uint8_t *nt, int n)   /* ascending, no duplicates, packed (a write's whole value) */
++{
++    uint8_t t[SN];
++    int m = 0, k = 0;
++    uint32_t w = 0;
++    for (int i = 0; i < n && m < SN; i++)
++        if (nt[i])
++            t[m++] = nt[i];
++    for (int i = 1; i < m; i++) {
++        uint8_t v = t[i];
++        int j = i;
++        while (j > 0 && t[j - 1] > v)
++            t[j] = t[j - 1], j--;
++        t[j] = v;
++    }
++    for (int i = 0; i < m; i++)
++        if (!k || t[i] != t[k - 1])
++            t[k++] = t[i];
++    for (int i = 0; i < k; i++)
++        w |= (uint32_t)t[i] << (8 * i);
++    return w;
++}
++/* the chord a single root sets: the root and its third and fifth in the conductor's scale (a diatonic triad) */
++static void brain_chord_of_root(seq_t *s, int root)
++{
++    uint8_t t[3];
++    if (root < 1 || root > 127) {
++        s->brain_chord = 0;
++        return;
++    }
++    t[0] = (uint8_t)root;
++    t[1] = (uint8_t)scale_step(root, s->brain_key, s->brain_scale, 2);
++    t[2] = (uint8_t)scale_step(root, s->brain_key, s->brain_scale, 4);
++    s->brain_chord = chord_word(t, 3);
++}
++/* the chord the conductor's own state implies (a scene stores no chord): the triad on its degree */
++static void brain_chord_from_deg(seq_t *s)
++{
++    uint16_t mask = scale_mask(s->brain_scale < NBS ? s->brain_scale : BS_MAJOR);
++    int key = s->brain_key % 12, base = note_to_deg(60 + key, key, mask);
++    brain_chord_of_root(s, deg_to_note(base + brain_deg(s), key, mask));
++}
++/* the chord an event sets: 2..SN notes are the chord as played; one note is its diatonic triad */
++static void brain_set_chord(seq_t *s, const uint8_t *nt, int n)
++{
++    int m = 0, root = 0;
++    for (int i = 0; i < n && i < SN; i++)
++        if (nt[i]) {
++            if (!m)
++                root = nt[i];
++            m++;
++        }
++    if (!m)
++        return;                          /* (a rest keeps the chord it heard: as the degree does) */
++    if (m == 1)
++        brain_chord_of_root(s, root);
++    else
++        s->brain_chord = chord_word(nt, n);
++}
++
++/* the harmonizer: a note onto the active chord */
++static int chord_snap(int note, uint32_t w)          /* the nearest tone, register kept, ties down */
++{
++    int best = note, bd = 128;
++    for (int i = 0; i < SN; i++) {
++        int t = (int)(w >> (8 * i) & 0xFFu), c;
++        if (!t)
++            continue;
++        c = note - ((note - t) % 12 + 12) % 12;      /* the tone at or under the note */
++        for (int k = 0; k < 2; k++, c += 12) {
++            int d = c > note ? c - note : note - c;
++            if (d < bd || (d == bd && c < best))
++                best = c, bd = d;
++        }
++    }
++    return clamp_note(best);
++}
++static int chord_deg(int note, uint32_t w, int key, int scale)   /* the scale's degree picks a chord tone */
++{
++    uint16_t mask = scale_mask(scale);
++    int n = chord_n(w), len = mask_len(mask), idx, tone;
++    if (n < 1)
++        return note;
++    if (len < 1)
++        len = 1;
++    idx = note_to_deg(note, key % 12, mask) % len;
++    if (idx < 0)
++        idx += len;
++    tone = (int)(w >> (8 * (idx % n)) & 0xFFu);
++    return clamp_note(tone + 12 * floor_div(note - tone + 6, 12));   /* the octave nearest the note */
++}
++
+ /* a routed track's note through the brain (steps and live keys alike) */
+ static int brain_note(const seq_t *s, int t, int note)
+ {
+     int mode = brain_follows(s, t) ? s->par[t][TP_BRAIN] : 0;
+     if (!mode)
+         return note;
++    if (mode >= BM_HARMONY) {
++        uint32_t w = s->brain_chord;                  /* (one read: a chord never changes halfway through) */
++        if (w)
++            return mode == BM_HARMONY ? chord_snap(note, w)
++                                      : chord_deg(note, w, s->brain_key, s->brain_scale);
++        mode = BM_DIATONIC;                           /* no chord yet: as before the harmonizer */
++    }
+     return brain_shift(note, s->brain_key, s->brain_scale, brain_deg(s), mode);
+ }
+ 
+@@ -535,6 +643,35 @@ static void brain_set_near(seq_t *s, int root)
+     s->brain_deg = (uint8_t)(int8_t)d;
+ }
+ 
++/* the lowest SN keys of a held set (bit note), ascending: what a held chord plays */
++static int held_notes(const uint32_t *phys, uint8_t *out)
++{
++    int n = 0;
++    for (int w = 0; w < 4 && n < SN; w++)
++        for (int i = 0; i < 32 && n < SN; i++)
++            if (phys[w] >> i & 1u)
++                out[n++] = (uint8_t)(w * 32 + i);
++    return n;
++}
++
++/* an event that sets the chord from a root or from the notes played: the degree stays the lowest note's */
++static void brain_set_root_notes(seq_t *s, const uint8_t *nt, int n)
++{
++    int lo = low_note(nt, n);
++    if (!lo)
++        return;
++    brain_set_root(s, lo);
++    brain_set_chord(s, nt, n);
++}
++static void brain_set_near_notes(seq_t *s, const uint8_t *nt, int n)
++{
++    int lo = low_note(nt, n);
++    if (!lo)
++        return;
++    brain_set_near(s, lo);
++    brain_set_chord(s, nt, n);
++}
++
+ /* the BRAIN track's knobs: key / scale taken when they change (a scene may have set the sequencer's own); E1 the
+  * FOLLOW track (0 off, 1..8: its notes set the chords), E4 the link track (0 off, 1..8) */
+ static void brain_follow_par(seq_t *s)
+@@ -548,6 +685,8 @@ static void brain_follow_par(seq_t *s)
+         s->brain_key = (uint8_t)(e[1] % 12);
+     if (e[2] != s->brain_seen[2])
+         s->brain_scale = e[2] < NBS ? e[2] : BS_MAJOR;
++    if (e[1] != s->brain_seen[1] || e[2] != s->brain_seen[2] || !s->brain_chord)
++        brain_chord_from_deg(s);              /* a key or scale change moves the harmony with it */
+     for (t = 0; t < 4; t++)
+         s->brain_seen[t] = e[t];
+     for (t = 0; t < NTRK; t++)
+@@ -815,8 +954,8 @@ static void fire_notes(seq_t *s, int t, const step_t *st, int p, uint32_t L, int
+             emit_note(s, t, note, vel, glide, tag, len_q8, o);
+         tr->last_note[n++] = (uint8_t)note;
+     }
+-    if (n && !ratchet && t == brain_src(s))   /* the FOLLOW track: its lowest note sets the chord */
+-        brain_set_near(s, low_note(tr->last_note, n));
++    if (n && !ratchet && t == brain_src(s))   /* the FOLLOW track: its notes set the chord */
++        brain_set_near_notes(s, tr->last_note, n);
+     pl = s->par[t][TP_PLAYER];
+     if (n && pl == PL_ARP)
+         step_arp(s, t, tr->last_note, n, vel, len_q8);
+@@ -849,10 +988,9 @@ static void fire_aux(seq_t *s, int t, const step_t *st, int p, uint32_t L, const
+     uint32_t len_q8 = st->len ? len_of(L, st->len) : L / 100u * (tp->nlen > 100 ? 100u : tp->nlen);
+     int i;
+     (void)p;
+-    if (t == AUX_BRAIN) {             /* the chord's lowest note is its root (a FOLLOW track sets them instead) */
+-        int root = low_note(st->note, SN);
+-        if (root && brain_src(s) < 0)
+-            brain_set_root(s, root);
++    if (t == AUX_BRAIN) {             /* the step's notes are the chord; the lowest is its root */
++        if (brain_src(s) < 0)
++            brain_set_root_notes(s, st->note, SN);
+         return;
+     }
+     for (i = 0; i < SN; i++) {
+@@ -1132,6 +1270,7 @@ static void scene_read(seq_t *s, int k, uint8_t *next)
+     s->brain_key = (uint8_t)(sc->brain_key % 12);
+     s->brain_scale = sc->brain_scale < NBS ? sc->brain_scale : BS_MAJOR;
+     s->brain_deg = sc->brain_deg;
++    brain_chord_from_deg(s);              /* a scene stores the degree, not the chord: the triad on it */
+     s->wv_ppat = (uint8_t)(sc->weave % NPATT);
+     s->scene = (uint8_t)k;
+ }
+@@ -1465,8 +1604,8 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
+     if (retrig && trig_ok)
+         happens = cond_plays(s, t, st);
+     plays = happens && !(s->mute >> t & 1u) && !punch_muted(s, t) && !tr->fill_on && !step_empty(st);
+-    if (happens && !plays && !drum && t == brain_src(s) && low_note(st->note, SN))
+-        brain_set_near(s, low_note(st->note, SN));   /* (a FOLLOW track muted still sets the chords) */
++    if (happens && !plays && !drum && t == brain_src(s))
++        brain_set_near_notes(s, st->note, SN);   /* (a FOLLOW track muted still sets the chords) */
+     if (happens && !rep && tr->act[SC_JUMP])
+         jump_set(s, t, tr->act[SC_JUMP] - 1, p);
+     kind = tr->act[SC_PULSE] ? SC_PULSE : tr->act[SC_HOLD] ? SC_HOLD : 0;
+@@ -1666,7 +1805,9 @@ static void fire_fills(seq_t *s, const seq_sink_t *o)
+             note = tr->fill_notes[(r >> 2) % tr->nfill];
+             vel = 70 + (int)(r >> 10) % 41;
+         }
+-        note = scale_snap(brain_note(s, t, note), s->brain_key, s->brain_scale);
++        note = brain_note(s, t, note);
++        if (!brain_follows(s, t) || s->par[t][TP_BRAIN] < BM_HARMONY || !s->brain_chord)
++            note = scale_snap(note, s->brain_key, s->brain_scale);   /* (a chord tone is no scale note) */
+         if (fx_on(s, t, PX_OCTAVE))
+             note -= 12;
+         note = clamp_note(note);
+@@ -2121,16 +2262,6 @@ static void players_follow_par(seq_t *s, const seq_sink_t *o)
+     }
+ }
+ 
+-static int phys_lowest(const player_t *pl)   /* the lowest key down, 0 none */
+-{
+-    for (int w = 0; w < 4; w++)
+-        if (pl->phys[w])
+-            for (int i = 0; i < 32; i++)
+-                if (pl->phys[w] >> i & 1u)
+-                    return w * 32 + i;
+-    return 0;
+-}
+-
+ static void phys_set(uint32_t *phys, uint8_t *nphys, int note, int on)
+ {
+     uint32_t b = 1u << (note & 31);
+@@ -2409,8 +2540,12 @@ static void key_in(seq_t *s, int t, int note, int on, int vel, int raw, const se
+             player_note_off(s, t, shifted, TAG_KEY | (uint32_t)note, o);
+         break;
+     }
+-    if (on && t == brain_src(s) && phys_lowest(pl))   /* the FOLLOW track: its lowest key down sets the chord */
+-        brain_set_near(s, phys_lowest(pl));
++    if (on && t == brain_src(s)) {                    /* the FOLLOW track: its held keys are the chord */
++        uint8_t nt[SN];
++        int n = held_notes(pl->phys, nt);
++        if (n)
++            brain_set_near_notes(s, nt, n);
++    }
+ }
+ 
+ static void keys_all_off(seq_t *s, int t, const seq_sink_t *o)
+@@ -2438,10 +2573,10 @@ static void keys_all_off(seq_t *s, int t, const seq_sink_t *o)
+     pl->sroll_to_next = NEVER;
+ }
+ 
+-/* a key on the BRAIN track: the lowest key held is the chord's root; the link track plays the key as pressed */
++/* a key on the BRAIN track: the keys held are the chord (the lowest its root); the link track plays the key as
++ * pressed */
+ static void brain_key_in(seq_t *s, int note, int on, const seq_sink_t *o)
+ {
+-    int w, i, root = 0;
+     if (note < 1 || note > 127)
+         return;
+     phys_set(s->brain_phys, 0, note, on);
+@@ -2452,13 +2587,10 @@ static void brain_key_in(seq_t *s, int note, int on, const seq_sink_t *o)
+             rec_key_off(s, AUX_BRAIN, note);
+     }
+     if (on) {
+-        for (w = 0; w < 4 && !root; w++)
+-            for (i = 0; i < 32; i++)
+-                if (s->brain_phys[w] >> i & 1u) {
+-                    root = w * 32 + i;
+-                    break;
+-                }
+-        brain_set_root(s, root ? root : note);
++        uint8_t nt[SN];
++        int n = held_notes(s->brain_phys, nt);
++        brain_set_root(s, n ? nt[0] : note);
++        brain_set_chord(s, nt, n);    /* (one key: its diatonic triad) */
+     }
+     if (s->brain_link >= 1 && s->brain_link <= NTRK)
+         key_in(s, s->brain_link - 1, note, on, 100, 1, o);
+diff --git a/app/seq/seq.h b/app/seq/seq.h
+index dca72f6..3a8869e 100644
+--- a/app/seq/seq.h
++++ b/app/seq/seq.h
+@@ -236,6 +236,8 @@ typedef struct {
+     volatile uint8_t brain_link;      /* 0 off, 1..8 = instrument track t + 1 played from the brain's keys too */
+     volatile uint16_t brain_route;    /* bit t = track t follows */
+     uint32_t brain_phys[4];           /* the brain's keys down (bit note): the lowest is the chord's root */
++    volatile uint32_t brain_chord;    /* the active chord: up to SN (4) MIDI notes in its bytes, ascending, 0 = none.
++                                       * One aligned word, so the interrupt reads it whole (see pattern.h) */
+     /* punch-in */
+     uint32_t punch_keys;              /* bits NPUNCH_FX: held keys (set from the key ring, in the interrupt) */
+     uint8_t punch_tgt[NPUNCH_FX];     /* each held key's target: 0xFF = its octave's group, else one track */
+diff --git a/app/ui.c b/app/ui.c
+index ae501ab..efd7b2e 100644
+--- a/app/ui.c
++++ b/app/ui.c
+@@ -132,7 +132,7 @@ static void apply_brain(void)
+     seq.brain_scale = p[TP_E3] % NBS;
+     seq.brain_link = p[TP_E4] % 9u;
+     for (int t = 0; t < NTRK; t++)
+-        if (proj.trk[t].par[TP_BRAIN] % 3u && t + 1 != seq.brain_src)
++        if (proj.trk[t].par[TP_BRAIN] % NBM && t + 1 != seq.brain_src)
+             route |= (uint16_t)(1u << t);
+     seq.brain_route = route;
+     pats.scene[cur_scene()].brain_key = seq.brain_key;
+@@ -2475,7 +2475,7 @@ static void list_change_do(int32_t e)
+         }
+         case A_FOLLOW: {
+             int t = list_follow_trk();
+-            set_tp(t, TP_BRAIN, (proj.trk[t].par[TP_BRAIN] % 3 + d + 3) % 3);
++            set_tp(t, TP_BRAIN, (proj.trk[t].par[TP_BRAIN] % NBM + d + NBM) % NBM);
+             break;
+         }
+         case A_PUMP_BY: case A_PUMP_REL: case A_PUMP_ACC: case A_LEVEL: {   /* the master out page's list */
+diff --git a/app/web/words/12821997f8.json b/app/web/words/12821997f8.json
+new file mode 100644
+index 0000000..665864e
+--- /dev/null
++++ b/app/web/words/12821997f8.json
+@@ -0,0 +1 @@
++{"format":1,"words":[["Eb","E flat"],["Ab","A flat"],["Bb","B flat"],["T#","track #"],["P#","pattern #"],["S#","scene #"],["U#","user preset #"],["K#","user kit #"],["L#","left #"],["R#","right #"],["CO","conductor"],["COND","conductor"],["TH","throws"],["THROW","throws"],["F1","effects 1"],["F2","effects 2"],["FX I","effects 1"],["FX II","effects 2"],["studio S","studio small"],["studio M","studio medium"],["studio L","studio large"],["VEL","velocity"],["NOTE LEN","note length"],["QUANT","quantise"],["LEN","length"],["PORTA","portamento"],["CUT","cutoff"],["RES","resonance"],["FENV","envelope amount"],["FREQ","frequency"],["FDBK","feedback"],["MOD","modulation"],["ENV AMT","envelope amount"],["KTRK","key tracking"],["keytrack","key tracking"],["Master EQ","master equalizer"],["HP","high pass"],["BP","band pass"],["LFO","L F O"],["LFO 2","L F O page 2"],["DEST","destination"],["AMT","amount"],["ARP","arpeggio"],["PW","pulse width"],["FM","F M"],["AM","A M"],["EQ","equalizer"],["SAT","saturator"],["COMP","compressor"],["PERC","drums"],["MEL","melodic"],["BPM","beats per minute"],["OCT","octave"],["OCT-","octave down"],["OCT+","octave up"],["SEL","S E L"],["ALGO","algorithm"],["GLO","global"],["SEQ","sequencer"],["REC","record"],["ms","milliseconds"],["Hz","hertz"],["dB","decibels"],["st","semitones"],["ct","cents"],["1/16T","sixteenth triplet"],["1/8T","eighth triplet"],["# in 1","# steps over one octave"],["# in 3","# steps over three octaves"],["bump dn","bump down"],["fade dn","fade down"],["fwd/back","forward or back"],["to fx II","to effects 2"],["SEND1","send to effects 1"],["SEND2","send to effects 2"],["updown","up and down"],["S&H","sample and hold"],["EXT","external clock"],["BT","Bluetooth"],["PIN","pairing code"],["ext","external clock"],["usb","U S B"],["USB","U S B"],["MIDI","midi"],["hat","closed hat"],["open","open hat"],["ltom","low tom"],["htom","high tom"],["fm","F M"],["harm min","harmonic minor"],["mixolyd","mixolydian"],["oct up","octave up"],["5th up","fifth up"],["3rd up","third up"],["chrom up","chromatic up"],["chrom dn","chromatic down"],["q #%","quantize # percent"],["1st of #","first of #"],["seg #","segment #"],["x1","normal"],["tamb","tambourine"],["strng","string"],["TO FX II","to effects 2"],["mel","melodic"],["KEYTRK","key tracking"],["lowcut","low cut"],["hicut","high cut"],["keytrk","key tracking"],["fdbk","feedback"],["res","resonance"],["harm","harmonics"],["mod decay","modulation decay"],["PRESET #/#","preset # of #"],["BASS #/#","bass # of #"],["LEAD #/#","lead # of #"],["PAD #/#","pad # of #"],["KEYS #/#","keys # of #"],["PLUCK #/#","pluck # of #"],["BELL #/#","bell # of #"],["STAB #/#","stab # of #"],["STRINGS #/#","strings # of #"],["BRASS #/#","brass # of #"],["VOICE #/#","voice # of #"],["CHORD #/#","chord # of #"],["FX #/#","effect # of #"],["DRUM #/#","drum # of #"],["LOOP #/#","loop # of #"],["REST #","rest, step #"],["BACK #","back to step #"],["lp24","low pass 24"],["lp12","low pass 12"],["hp12","high pass 12"],["bp12","band pass 12"],["bounce+","bounce plus"],["moire","mwah ray"],["chenille","shuh neel"],["voile","voyl"],["vosim","voh sim"],["timbre","tamber"],["oct","octave"],["maj7","major 7"],["min7","minor 7"],["sus4","sus 4"],["faille","file"],["sley","slay"],["pirn","purn"],["kinkhab","kin kab"],["zari","zah ree"],["tussah","tuss uh"],["pongee","pon jee"],["lampas","lam pus"],["samite","say mite"],["kenaf","kuh naff"],["abaca","ah bah kah"],["urena","you ree nuh"],["istle","ist lee"],["henequen","hen uh ken"],["ninon","nee non"],["lisse","leess"],["tarlatan","tar luh tun"],["batiste","ba teest"],["mousseline","moose leen"],["kooboo","koo boo"],["malacca","muh lack uh"],["osier","oh zher"],["baize","bays"],["loden","low den"],["chamois","sham ee"],["cambric","kame brick"],["toile","twahl"],["ramie","ram ee"],["hawser","haw zer"],["skein","skane"],["chambray","sham bray"],["madras","mad rass"],["vicuna","vi koo nya"],["worsted","wuss tid"],["jacquard","jack ard"],["baldachin","bal duh kin"],["georgette","jor jet"],["crepe","krayp"],["buckram","buck rum"],["noil","noyl"],["shantung","shan tung"],["organdy","or gun dee"],["seersucker","seer sucker"],["deckchair","deck chair"],["b/w","black and white"],["cc","controller"],["CC","controller"],["harmony","harmony"],["chord deg","chord degree"],["FX","effects"],["REV","reverb"],["DLY","delay"],["ENV","envelope"],["LFO","L F O"],["GLO","global"],["OCT+","octave up"],["OCT-","octave down"],["OCT","octave"],["REC","record"],["SEQ","sequence"],["ALGO","algorithm"],["ARP","arp"],["USB","U S B"],["MIDI CH #","MIDI channel #"],["MIDI","midi"],["dB","decibels"],["Hz","hertz"],["kHz","kilohertz"],["ms","milliseconds"],["bpm","B P M"],["CC #","controller #"],["CC","controller"],["INF","infinity"],["PCT","percent"],["2ND","second"],["FWD","forward"],["RND","random"],["MEM","memory"],["CPU","C P U"],["P-LOCK","p-lock"],["MIN","minor"],["MAJ","major"],["ATK","attack"],["DCY","decay"],["SUS","sustain"],["REL","release"],["RES","resonance"],["RESO","resonance"],["FREQ","frequency"],["AMT","amount"],["LVL","level"],["VOL","volume"],["DIST","distortion"],["SAT","saturation"],["COMP","compressor"],["THRESH","threshold"],["PERF","performance"],["HP","high-pass"],["LP","low-pass"],["BP","band-pass"]]}
+diff --git a/app/web/words/f4a5493b52.json b/app/web/words/f4a5493b52.json
+new file mode 100644
+index 0000000..1b29c87
+--- /dev/null
++++ b/app/web/words/f4a5493b52.json
+@@ -0,0 +1 @@
++{"format":1,"words":[["Eb","E flat"],["Ab","A flat"],["Bb","B flat"],["T#","track #"],["P#","pattern #"],["S#","scene #"],["U#","user preset #"],["K#","user kit #"],["L#","left #"],["R#","right #"],["CO","conductor"],["COND","conductor"],["TH","throws"],["THROW","throws"],["F1","effects 1"],["F2","effects 2"],["FX I","effects 1"],["FX II","effects 2"],["studio S","studio small"],["studio M","studio medium"],["studio L","studio large"],["VEL","velocity"],["NOTE LEN","note length"],["QUANT","quantise"],["LEN","length"],["PORTA","portamento"],["CUT","cutoff"],["RES","resonance"],["FENV","envelope amount"],["FREQ","frequency"],["FDBK","feedback"],["MOD","modulation"],["ENV AMT","envelope amount"],["KTRK","key tracking"],["keytrack","key tracking"],["Master EQ","master equalizer"],["HP","high pass"],["BP","band pass"],["LFO","L F O"],["LFO 2","L F O page 2"],["DEST","destination"],["AMT","amount"],["ARP","arpeggio"],["PW","pulse width"],["FM","F M"],["AM","A M"],["EQ","equalizer"],["SAT","saturator"],["COMP","compressor"],["PERC","drums"],["MEL","melodic"],["BPM","beats per minute"],["OCT","octave"],["OCT-","octave down"],["OCT+","octave up"],["SEL","S E L"],["ALGO","algorithm"],["GLO","global"],["SEQ","sequencer"],["REC","record"],["ms","milliseconds"],["Hz","hertz"],["dB","decibels"],["st","semitones"],["ct","cents"],["1/16T","sixteenth triplet"],["1/8T","eighth triplet"],["# in 1","# steps over one octave"],["# in 3","# steps over three octaves"],["bump dn","bump down"],["fade dn","fade down"],["fwd/back","forward or back"],["to fx II","to effects 2"],["SEND1","send to effects 1"],["SEND2","send to effects 2"],["updown","up and down"],["S&H","sample and hold"],["EXT","external clock"],["BT","Bluetooth"],["PIN","pairing code"],["ext","external clock"],["usb","U S B"],["USB","U S B"],["MIDI","midi"],["hat","closed hat"],["open","open hat"],["ltom","low tom"],["htom","high tom"],["fm","F M"],["harm min","harmonic minor"],["mixolyd","mixolydian"],["oct up","octave up"],["5th up","fifth up"],["3rd up","third up"],["chrom up","chromatic up"],["chrom dn","chromatic down"],["q #%","quantize # percent"],["1st of #","first of #"],["seg #","segment #"],["x1","normal"],["tamb","tambourine"],["strng","string"],["TO FX II","to effects 2"],["mel","melodic"],["KEYTRK","key tracking"],["lowcut","low cut"],["hicut","high cut"],["keytrk","key tracking"],["fdbk","feedback"],["res","resonance"],["harm","harmonics"],["mod decay","modulation decay"],["PRESET #/#","preset # of #"],["BASS #/#","bass # of #"],["LEAD #/#","lead # of #"],["PAD #/#","pad # of #"],["KEYS #/#","keys # of #"],["PLUCK #/#","pluck # of #"],["BELL #/#","bell # of #"],["STAB #/#","stab # of #"],["STRINGS #/#","strings # of #"],["BRASS #/#","brass # of #"],["VOICE #/#","voice # of #"],["CHORD #/#","chord # of #"],["FX #/#","effect # of #"],["DRUM #/#","drum # of #"],["LOOP #/#","loop # of #"],["REST #","rest, step #"],["BACK #","back to step #"],["lp24","low pass 24"],["lp12","low pass 12"],["hp12","high pass 12"],["bp12","band pass 12"],["bounce+","bounce plus"],["moire","mwah ray"],["chenille","shuh neel"],["voile","voyl"],["vosim","voh sim"],["timbre","tamber"],["oct","octave"],["maj7","major 7"],["min7","minor 7"],["sus4","sus 4"],["faille","file"],["sley","slay"],["pirn","purn"],["kinkhab","kin kab"],["zari","zah ree"],["tussah","tuss uh"],["pongee","pon jee"],["lampas","lam pus"],["samite","say mite"],["kenaf","kuh naff"],["abaca","ah bah kah"],["urena","you ree nuh"],["istle","ist lee"],["henequen","hen uh ken"],["ninon","nee non"],["lisse","leess"],["tarlatan","tar luh tun"],["batiste","ba teest"],["mousseline","moose leen"],["kooboo","koo boo"],["malacca","muh lack uh"],["osier","oh zher"],["baize","bays"],["loden","low den"],["chamois","sham ee"],["cambric","kame brick"],["toile","twahl"],["ramie","ram ee"],["hawser","haw zer"],["skein","skane"],["chambray","sham bray"],["madras","mad rass"],["vicuna","vi koo nya"],["worsted","wuss tid"],["jacquard","jack ard"],["baldachin","bal duh kin"],["georgette","jor jet"],["crepe","krayp"],["buckram","buck rum"],["noil","noyl"],["shantung","shan tung"],["organdy","or gun dee"],["seersucker","seer sucker"],["deckchair","deck chair"],["b/w","black and white"],["cc","controller"],["CC","controller"],["harmony","harmony"],["chord deg","chord degree"],["ch. deg","chord degree"],["FX","effects"],["REV","reverb"],["DLY","delay"],["ENV","envelope"],["LFO","L F O"],["GLO","global"],["OCT+","octave up"],["OCT-","octave down"],["OCT","octave"],["REC","record"],["SEQ","sequence"],["ALGO","algorithm"],["ARP","arp"],["USB","U S B"],["MIDI CH #","MIDI channel #"],["MIDI","midi"],["dB","decibels"],["Hz","hertz"],["kHz","kilohertz"],["ms","milliseconds"],["bpm","B P M"],["CC #","controller #"],["CC","controller"],["INF","infinity"],["PCT","percent"],["2ND","second"],["FWD","forward"],["RND","random"],["MEM","memory"],["CPU","C P U"],["P-LOCK","p-lock"],["MIN","minor"],["MAJ","major"],["ATK","attack"],["DCY","decay"],["SUS","sustain"],["REL","release"],["RES","resonance"],["RESO","resonance"],["FREQ","frequency"],["AMT","amount"],["LVL","level"],["VOL","volume"],["DIST","distortion"],["SAT","saturation"],["COMP","compressor"],["THRESH","threshold"],["PERF","performance"],["HP","high-pass"],["LP","low-pass"],["BP","band-pass"]]}
+diff --git a/app/words.tsv b/app/words.tsv
+index 2036d29..7071e94 100644
+--- a/app/words.tsv
++++ b/app/words.tsv
+@@ -192,3 +192,6 @@ deckchair	deck chair
+ b/w	black and white
+ cc	controller
+ CC	controller
++harmony	harmony
++chord deg	chord degree
++ch. deg	chord degree
+diff --git a/base b/base
+deleted file mode 160000
+index d0133c2..0000000
+--- a/base
++++ /dev/null
+@@ -1 +0,0 @@
+-Subproject commit d0133c23011b044b72240f9e0650307f1898dfcd
+diff --git a/base b/base
+new file mode 120000
+index 0000000..189af03
+--- /dev/null
++++ b/base
+@@ -0,0 +1 @@
++../fm1-base
+\ No newline at end of file
+diff --git a/docs/MANUAL.md b/docs/MANUAL.md
+index 30e7f07..6b6578d 100644
+--- a/docs/MANUAL.md
++++ b/docs/MANUAL.md
+@@ -60,9 +60,11 @@ black keys 1 to 11.
+    melodic track follows it. While it plays, play an F, then a G, then a C: everything moves with you, in the
+    scale. Press **SEQ**, turn **SELECT** to the Bar page and press black key 4 so that a step is a beat. Back on
+    Steps, hold **SEQ** and play a chord, let go and press a step, and so on: four steps make one bar of the
+-   progression. Or let T3's chords lead: press **EDIT**, turn **SELECT** to Follow and press black key 3.
++   progression. Or let T3's chords lead: press **EDIT**, turn **SELECT** to Follow and press black key 3. A track
++   can also take its pitches from the chord itself: press its **SEL** and set FOLLOWS CONDUCTOR to **harmony** (the
++   nearest chord tone to each note) or **ch. deg** (the note's scale degree picks the chord tone).
+ 
+-   <img src="img/screen-conductor.png" width="240" alt="The conductor&#x27;s Engine page: C major, degree 0, the tracks that follow lit; knobs key, scale, link" title="The conductor"> <img src="img/screen-conductor-follow.png" width="240" alt="The conductor&#x27;s Follow page: chords from T3, its box in its colour among the tracks that follow; T3&#x27;s lowest note sets the chord" title="Chords from a track">
++   <img src="img/screen-conductor.png" width="240" alt="The conductor&#x27;s Engine page: C major, degree 0, the tracks that follow lit; knobs key, scale, link" title="The conductor"> <img src="img/screen-conductor-follow.png" width="240" alt="The conductor&#x27;s Follow page: chords from T3, its box in its colour among the tracks that follow; T3&#x27;s notes set the chord" title="Chords from a track">
+ 6. **Throws.** Press **FX** and turn **SELECT** to its last page, Throws. Hold a low key: F3 mutes the
+    drums, G3 stutters them, A3 repeats, B3 echoes, C4 builds, D4 plays four on the floor and E4 jumbles them. A
+    high key does the same to the melodic tracks. Let go and the pattern comes back.
+@@ -168,7 +170,8 @@ press…" means keep **HOME** down while you press the next thing.
+ | solo a track | On Mix, hold its black key (hold several to solo them together). Let go and the mutes come back. <!-- hint: black 1 --> |
+ | sweep a few tracks together | Press **GLO** and turn **SELECT** to LFO, the shared LFO. The black keys pick the tracks, and **KNOB 4** picks what it moves. <!-- hint: press GLO; turn SELECT, KNOB 4; black 1,2,3 --> |
+ | play a progression | Turn **ALGORITHM** to COND (the conductor). Press **EDIT** and play a chord: it moves the tracks that follow. Press **SEQ** and press a step to put the chord on it. Set the scale to 4 on the Bar page so that a step is a beat. <!-- hint: turn ALGORITHM; press EDIT; white 1,3,5 --> |
+-| let a track lead the chords | On COND, press **EDIT** and turn **SELECT** to Follow. Press the track's black key, and its lowest note sets the chord for the others (use a chord part or a bass line). Press the same key again to turn it off. <!-- hint: press EDIT; turn SELECT; black 3 --> |
++| let a track lead the chords | On COND, press **EDIT** and turn **SELECT** to Follow. Press the track's black key, and its notes set the chord for the others (use a chord part or a bass line). Press the same key again to turn it off. <!-- hint: press EDIT; turn SELECT; black 3 --> |
++| harmonize a track to the chords | On COND, press **EDIT** and turn **SELECT** to Follow if a track leads (or play chords on COND's keys). Press that track's **SEL** and set FOLLOWS CONDUCTOR to harmony: each of its notes snaps to the nearest tone of the chord the conductor plays. **ch. deg** takes the note's place in the scale to pick a chord tone instead. <!-- hint: press EDIT; press SEL; turn ALGORITHM --> |
+ | get new sounds for the band | Press **HOME**, press **SEL** and pick RANDOMIZE PRESETS: T2 to T8 each get a random preset for their part. Press **SEL** for yes. |
+ | save | LOOM-8 saves by itself when it is stopped and quiet. **SAVE** saves at once. Hold **SAVE** and press white key 1 to 3 to save to that slot. <!-- hint: press SAVE --> |
+ | keep a sound | On a sound page, hold **SAVE** and press a white key. The sound becomes that user preset. <!-- hint: hold SAVE; white 1 --> |
+@@ -320,7 +323,8 @@ done.
+ | 14 | skip trigger: the step plays every Nth pass | a cycle of 1 to 9 |
+ | 15 | flam: a soft grace hit, then the step's own a moment later | 1 to 9 32nds of a step apart |
+ 
+-For the three skips, the value continues past random: the same cycles come round again, first playing every pass
++A step whose tonality is **ignore** follows nothing: the conductor's chord, the harmonizer's included, leaves its
++notes as they are. For the three skips, the value continues past random: the same cycles come round again, first playing every pass
+ but the last, then playing only the first. A new trick starts at its default: pulse and hold 4, multiply 2,
+ velocity 64, the ramps and random 4, glide 40 %, bend down-up, tonality fifth up, jump forward, the skips a
+ cycle of 2, and flam 4 32nds.
+@@ -497,7 +501,8 @@ delay. Press **SEL** for the list:
+ - COPY SOUND, then PASTE SOUND on another track, puts the same sound there, as a preset would: the track keeps its
+   own level, pan, player and MIDI OUT. A synth's sound pastes onto a synth track, a kit onto a kit track. Undo takes
+   it back.
+-- FOLLOWS CONDUCTOR sets whether the track follows the conductor.
++- FOLLOWS CONDUCTOR sets whether and how the track follows the conductor: diatonic, transpose, harmony (to the
++  nearest chord tone) or ch. deg (the scale's degree picks the chord tone).
+ 
+ <img src="img/screen-engine.png" width="240" alt="The Engine page on T2: the engine, its picture, the preset name, and its four knobs from 00 to 99" title="The Engine page"> <img src="img/screen-play.png" width="240" alt="Play: voice mode, portamento, bend range and volume" title="The Play page">
+ 
+@@ -1038,16 +1043,20 @@ Turn **ALGORITHM** past T8. Each aux track has its own page under **EDIT** and i
+ - **COND** (the conductor) has key, scale and link (an instrument track that also plays the conductor's keys).
+   Play a chord on its keys and the tracks that follow move to it. Its steps hold the chords you played: press
+   **SEQ** and a white key. Set the track scale to 4 so each step is a beat, or to 16 for a bar. Page 2 is the
+-  routing: black keys 1 to 8 toggle a track. Its **SEL** list sets how each track follows, diatonic or transpose
+-  only. Drum tracks never follow.
++  routing: black keys 1 to 8 toggle a track. Its **SEL** list sets how each track follows: **no**, **diatonic**
++  (moves by the chord's scale degree), **transpose** (the same distance in semitones), **harmony** (each note snaps
++  to the nearest tone of the chord itself) or **ch. deg** (the note's place in the scale picks a chord tone:
++  root, third, fifth, ... cycled, kept in the note's octave). The last two are the harmonizer. The conductor's
++  Engine page shows the chord it hears beside the degree. Drum tracks never follow.
+ 
+   Page 3, **Follow**, takes the chords from a track instead. Press that track's black key (press it again to turn
+-  it off), or turn **KNOB 1**. Each note the track plays sets the chord (its lowest note on a step, or the lowest
+-  of the keys held), so a chord part or a bass line can lead the others. The note's place in the scale counts, not
+-  its octave, and the other tracks move the nearer way: in C major, a G takes them down a fourth and an F takes
+-  them up a fourth. The leading track plays as written and follows nothing, and it still leads when muted. While a
+-  track leads, the conductor's own steps rest, but its keys still change the chord until the leading track's next
+-  note. A kit has no notes, so it can't lead.
++  it off), or turn **KNOB 1**. Each note the track plays sets the chord (all its notes on a step, or the keys
++  held, so a chord part sets the whole chord and a single note sets its triad), so a chord part or a bass line can
++  lead the others. The note's place in the scale counts for the degree, not its octave, and the other tracks move
++  the nearer way: in C major, a G takes them down a fourth and an F takes them up a fourth. A single leading note
++  is taken as the root of its diatonic triad (in C major, C gives C E G, G gives G B D). The leading track plays as
++  written and follows nothing, and it still leads when muted. While a track leads, the conductor's own steps rest,
++  but its keys still change the chord until the leading track's next note. A kit has no notes, so it can't lead.
+ - **WEAVE** (the weaves): hold its white keys 1 to 10 to weave T1 to T8, COND and THROW. With latch, a tap turns a
+   weave on and another tap turns it off. Each track weaves as its ARP's Weave page sets it, and REC records the
+   weaves onto the WEAVE steps. See Weave, above.
+diff --git a/tests/host/seq_test.c b/tests/host/seq_test.c
+index 86d0403..f5c588f 100644
+--- a/tests/host/seq_test.c
++++ b/tests/host/seq_test.c
+@@ -1211,6 +1211,99 @@ static void t_follow(void)             /* the conductor's FOLLOW track: its lowe
+     printf("ok %s\n", cur);
+ }
+ 
++static void t_harmony(void)            /* the harmonizer: the conductor's chord sets the followers' pitches */
++{
++    cur = "harmony";
++    /* the conductor's step holds a C major triad; "harmony" takes each note to the nearest tone */
++    reset();
++    P.pat[AUX_BRAIN][0].st[0].note[0] = 60;
++    P.pat[AUX_BRAIN][0].st[0].note[1] = 64;
++    P.pat[AUX_BRAIN][0].st[0].note[2] = 67;
++    P.pat[AUX_BRAIN][0].st[0].vel = 100;
++    par[0][TP_BRAIN] = BM_HARMONY;
++    note(0, 0, 61, 100);              /* C#: up to C */
++    note(0, 1, 62, 100);              /* D: a tie between C and E, down */
++    note(0, 2, 66, 100);              /* F#: up to G */
++    note(0, 3, 72, 100);              /* C5: already a tone, its register kept */
++    start();
++    run(4 * L16 + 40);
++    CHECK(on_n(0) && on_n(0)->a == 60);
++    CHECK(on_n(1) && on_n(1)->a == 60);
++    CHECK(on_n(2) && on_n(2)->a == 67);
++    CHECK(on_n(3) && on_n(3)->a == 72);
++    stop();
++    /* "chord deg": the note's place in the scale picks a chord tone (C E G, cycled) */
++    reset();
++    P.pat[AUX_BRAIN][0].st[0].note[0] = 60;
++    P.pat[AUX_BRAIN][0].st[0].note[1] = 64;
++    P.pat[AUX_BRAIN][0].st[0].note[2] = 67;
++    P.pat[AUX_BRAIN][0].st[0].vel = 100;
++    par[0][TP_BRAIN] = BM_DEGREE;
++    note(0, 0, 60, 100);              /* C: the root */
++    note(0, 1, 62, 100);              /* D: the third */
++    note(0, 2, 64, 100);              /* E: the fifth */
++    note(0, 3, 65, 100);              /* F: back to the root */
++    note(0, 4, 67, 100);              /* G: the third */
++    note(0, 5, 69, 100);              /* A: the fifth */
++    note(0, 6, 71, 100);              /* B: the root, an octave up */
++    start();
++    run(7 * L16 + 40);
++    CHECK(on_n(0)->a == 60 && on_n(1)->a == 64 && on_n(2)->a == 67 && on_n(3)->a == 60);
++    CHECK(on_n(4)->a == 64 && on_n(5)->a == 67 && on_n(6)->a == 72);
++    stop();
++    /* a lone conductor note is its diatonic triad (G: G B D) */
++    reset();
++    P.pat[AUX_BRAIN][0].st[0].note[0] = 67;
++    P.pat[AUX_BRAIN][0].st[0].vel = 100;
++    par[0][TP_BRAIN] = BM_HARMONY;
++    note(0, 0, 62, 100);              /* D: the triad's fifth an octave down */
++    start();
++    run(L16 + 40);
++    CHECK(on_n(0)->a == 62);
++    stop();
++    /* the FOLLOW track's step: all of its notes are the chord */
++    reset();
++    par[AUX_BRAIN][TP_E1] = 3;        /* T3 */
++    st(2, 0)->note[0] = 60;           /* C E G, not just the C */
++    st(2, 0)->note[1] = 64;
++    st(2, 0)->note[2] = 67;
++    st(2, 0)->vel = 100;
++    par[0][TP_BRAIN] = BM_HARMONY;
++    note(0, 0, 61, 100);              /* C#: to C, not to the scale's D */
++    start();
++    run(L16 + 40);
++    CHECK(on_n(0)->a == 60);
++    stop();
++    /* the FOLLOW track's held keys are the chord too */
++    reset();
++    par[AUX_BRAIN][TP_E1] = 3;
++    par[0][TP_BRAIN] = BM_HARMONY;
++    note(0, 0, 61, 100);
++    seq_key(&S, 2, 60, 1, 100);
++    seq_key(&S, 2, 64, 1, 100);
++    seq_key(&S, 2, 67, 1, 100);
++    run(10);
++    start();
++    run(L16 + 40);
++    CHECK(on_n(0)->a == 60);
++    seq_key(&S, 2, 60, 0, 0);
++    seq_key(&S, 2, 64, 0, 0);
++    seq_key(&S, 2, 67, 0, 0);
++    stop();
++    /* no chord at all: mode 3 falls back to diatonic (a degree of 0 leaves the note) */
++    reset();
++    par[0][TP_BRAIN] = BM_HARMONY;
++    start();
++    S.brain_chord = 0;                /* (an empty chord: as before the harmonizer) */
++    seq_key(&S, 0, 62, 1, 100);       /* D: C E G would take it down to C */
++    seq_keys_live(&S, 0, &sink);
++    CHECK(on_n(0) && on_n(0)->a == 62);
++    seq_key(&S, 0, 62, 0, 0);
++    seq_keys_live(&S, 0, &sink);
++    stop();
++    printf("ok %s\n", cur);
++}
++
+ static void t_arp(void)
+ {
+     cur = "arp";
+@@ -2864,6 +2957,7 @@ int main(void)
+     t_pulse();
+     t_pulse_kit();
+     t_follow();
++    t_harmony();
+     t_hold();
+     t_multiply();
+     t_velocity();
+diff --git a/tests/scenarios/harmony.xy b/tests/scenarios/harmony.xy
+new file mode 100644
+index 0000000..0529d37
+--- /dev/null
++++ b/tests/scenarios/harmony.xy
+@@ -0,0 +1,31 @@
++# the harmonizer: a follower takes its pitches from the conductor's chord instead of the scale
++wait 200
++turn ALGO 1
++expect trk 2
++knob 2 brain harmony
++expect par2.brain 3
++knob 3 brain ch._deg
++expect par3.brain 4
++# a track's SEL list names the mode
++tap EDIT
++tap SEL
++row FOLLOWS CONDUCTOR
++wait 40
++shot harmony_list.png
++tap HOME
++# the conductor's held keys are its chord (C E G); the Engine page shows it beside the degree
++spin ALGO 7
++expect trk 9
++tap EDIT
++play 9 60 on
++play 9 64 on
++play 9 67 on
++wait 40
++shot harmony_chord.png
++play 9 60 off
++play 9 64 off
++play 9 67 off
++# the routing page: a bar marks the harmonizer's modes
++turn SELECT 1
++wait 40
++shot harmony_routing.png
+-- 
+2.55.0
+

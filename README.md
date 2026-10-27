@@ -636,6 +636,9 @@ patches/
   fm1-loom/05-step-sel-list/        ui.c: SELECT moves a held step's SEL list (the lock editor no
                                     longer keeps it), and letting the step go closes the list
                                     instead of switching it to the pattern's (§7, bugs 4-5)
+  fm1-loom/06-harmonizer/           seq.c, synth.h: the chord the conductor plays, kept whole in one
+                                    word; follow modes "harmony" (nearest chord tone) and "chord deg"
+                                    (the scale's degree picks a chord tone); no format change
   fm1-amb/01-usb-host-compat/       AMB-1's: the same descriptor set, and its USB names
   frasil/01-usb-host-compat/        FRASIL's: the same descriptor set, and its USB names
   felucca/01-usb-host-compat/       usb.c: MIDI behind the streams, the audio IAD, a serial; descriptor test
