@@ -639,6 +639,9 @@ patches/
   fm1-loom/06-harmonizer/           seq.c, synth.h: the chord the conductor plays, kept whole in one
                                     word; follow modes "harmony" (nearest chord tone) and "chord deg"
                                     (the scale's degree picks a chord tone); no format change
+  fm1-loom/07-domino/               seq.c, pattern.c: a fifth weave rule, "domino": the track's hits are
+                                    the triggers and the woven pattern's notes advance one per hit, each
+                                    at its own length; no format change
   fm1-amb/01-usb-host-compat/       AMB-1's: the same descriptor set, and its USB names
   frasil/01-usb-host-compat/        FRASIL's: the same descriptor set, and its USB names
   felucca/01-usb-host-compat/       usb.c: MIDI behind the streams, the audio IAD, a serial; descriptor test
