@@ -1,18 +1,18 @@
-From 96c3c142178907586356002f7e3ca5dac30cea9e Mon Sep 17 00:00:00 2001
+From a8383ba81ac3b613717093ba9fdb3b58e3f7d7ec Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Tue, 27 Oct 2026 23:41:32 +0100
-Subject: [PATCH] LOOM-8: the harmonizer. A track can follow the conductor's
- chord, not just its scale: the conductor now keeps the chord its keys, its
- steps or a FOLLOW track play (up to four notes, packed in one word the
- interrupt reads whole), and the new follow modes "harmony" (each note snaps
- to the nearest chord tone, register kept, ties down) and "chord deg" (the
- note's place in the scale picks the chord tone, kept in its octave) take
- their pitches from it. A single-note source is its diatonic triad; a scene
- re-derives the triad from its degree; no chord falls back to diatonic. Fills
- keep their chord tones. Five follow modes in the SEL lists and the routing
- page (a bar marks the harmonizer's), the active chord shown on the
- conductor's Engine page. No format change: the two modes are appended values
- of TP_BRAIN. harmony.xy; t_harmony; the manual
+Subject: [PATCH] LOOM-8: harmony. A track can follow the conductor's chord,
+ not just its scale: the conductor now keeps the chord its keys, its steps or
+ a FOLLOW track play (up to four notes, packed in one word the interrupt reads
+ whole), and the new follow modes "harmony" (each note snaps to the nearest
+ chord tone, register kept, ties down) and "chord deg" (the note's place in
+ the scale picks the chord tone, kept in its octave) take their pitches from
+ it. A single-note source is its diatonic triad; a scene re-derives the triad
+ from its degree; no chord falls back to diatonic. Fills keep their chord
+ tones. Five follow modes in the SEL lists and the routing page (a bar marks
+ the harmony modes), the active chord shown on the conductor's Engine page. No
+ format change: the two modes are appended values of TP_BRAIN. harmony.xy;
+ t_harmony; the manual
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>
 ---
@@ -25,14 +25,12 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  app/web/words/12821997f8.json |   1 +
  app/web/words/f4a5493b52.json |   1 +
  app/words.tsv                 |   3 +
- base                          |   2 +-
  docs/MANUAL.md                |  35 ++++---
  tests/host/seq_test.c         |  94 +++++++++++++++++
  tests/scenarios/harmony.xy    |  31 ++++++
- 13 files changed, 355 insertions(+), 59 deletions(-)
+ 12 files changed, 354 insertions(+), 58 deletions(-)
  create mode 100644 app/web/words/12821997f8.json
  create mode 100644 app/web/words/f4a5493b52.json
- mode change 160000 => 120000 base
  create mode 100644 tests/scenarios/harmony.xy
 
 diff --git a/app/dsp/synth.c b/app/dsp/synth.c
@@ -58,7 +56,7 @@ index 089b519..6bc4874 100644
  /* a drumline key's values (synth.h DP_*); its model's knobs take their names and defaults from drumline.c
   * (tp_info_par). The key's envelope and filter: its Envelope and Filter pages */
 diff --git a/app/dsp/synth.h b/app/dsp/synth.h
-index f16c185..dfcd67a 100644
+index f16c185..37e0427 100644
 --- a/app/dsp/synth.h
 +++ b/app/dsp/synth.h
 @@ -83,7 +83,8 @@ enum {
@@ -75,7 +73,7 @@ index f16c185..dfcd67a 100644
      NTP
  };
  _Static_assert(NTP <= 511, "a parameter's index: nine bits in the engine's queue (engine.c cq_put); a lane's is 16");
-+/* how a track follows the conductor (TP_BRAIN): 0 and 1..2 are saved before the harmonizer and keep their meaning;
++/* how a track follows the conductor (TP_BRAIN): 0 and 1..2 are saved before harmony and keep their meaning;
 + * 3 and 4 are appended (append only: a project stores the byte). 3 "harmony" takes each note to the nearest tone of
 + * the active chord; 4 "ch. deg" takes the note's place in the scale to pick a chord tone. See seq.c brain_note */
 +enum { BM_NO, BM_DIATONIC, BM_TRANSPOSE, BM_HARMONY, BM_DEGREE, NBM };
@@ -83,7 +81,7 @@ index f16c185..dfcd67a 100644
  #define DPX_N 4                                      /* knobs 5..8 of a key's model */
  #define TP_DRUMX(s, j) (TP_DRUMX0 + (s) * DPX_N + (j))
 diff --git a/app/pages.c b/app/pages.c
-index 22e7ee1..6916bbe 100644
+index 22e7ee1..1323427 100644
 --- a/app/pages.c
 +++ b/app/pages.c
 @@ -153,7 +153,7 @@ static const char *const CLOCK_ROW[SEQ_NCLK] = {"internal", "sends", "receives"}
@@ -139,7 +137,7 @@ index 22e7ee1..6916bbe 100644
              e = s_cat(e, "+");
          num_i(deg, e);
          cv_text(12, 44, &FONT_B, t, deg ? K_NOW : K_DIM);
-+        if (chord) {                         /* the active chord: the tones the harmonizer plays */
++        if (chord) {                         /* the active chord: the tones harmony plays */
 +            char cb[24];
 +            char *q = cb;
 +            *q = 0;
@@ -176,14 +174,14 @@ index 22e7ee1..6916bbe 100644
          else
              cv_frame(x, 86, 22, 22, 5, K_LINE, K_BG);
 -        text_c(x + 11, 90, &FONT_B, t, m == 1 ? K_BG : m == 2 ? K_TEXT : K_FAINT);
-+        if (m >= BM_HARMONY)                          /* the harmonizer's modes: a bar under the number */
++        if (m >= BM_HARMONY)                          /* the harmony modes: a bar under the number */
 +            cv_rect(x + 6, 104, 10, 2, m == BM_HARMONY ? K_BG : K_TEXT);
 +        text_c(x + 11, 90, &FONT_B, t, m == BM_DIATONIC || m == BM_HARMONY ? K_BG : m ? K_TEXT : K_FAINT);
      }
      cv_blit(0, MAIN_Y);
  }
 diff --git a/app/seq/seq.c b/app/seq/seq.c
-index eedae27..bc75411 100644
+index eedae27..cb31c6c 100644
 --- a/app/seq/seq.c
 +++ b/app/seq/seq.c
 @@ -503,12 +503,120 @@ static int brain_src(const seq_t *s) { return s->brain_src >= 1 && s->brain_src
@@ -259,7 +257,7 @@ index eedae27..bc75411 100644
 +        s->brain_chord = chord_word(nt, n);
 +}
 +
-+/* the harmonizer: a note onto the active chord */
++/* harmony: a note onto the active chord */
 +static int chord_snap(int note, uint32_t w)          /* the nearest tone, register kept, ties down */
 +{
 +    int best = note, bd = 128;
@@ -302,7 +300,7 @@ index eedae27..bc75411 100644
 +        if (w)
 +            return mode == BM_HARMONY ? chord_snap(note, w)
 +                                      : chord_deg(note, w, s->brain_key, s->brain_scale);
-+        mode = BM_DIATONIC;                           /* no chord yet: as before the harmonizer */
++        mode = BM_DIATONIC;                           /* no chord yet: as before harmony */
 +    }
      return brain_shift(note, s->brain_key, s->brain_scale, brain_deg(s), mode);
  }
@@ -530,23 +528,8 @@ index 2036d29..7071e94 100644
 +harmony	harmony
 +chord deg	chord degree
 +ch. deg	chord degree
-diff --git a/base b/base
-deleted file mode 160000
-index d0133c2..0000000
---- a/base
-+++ /dev/null
-@@ -1 +0,0 @@
--Subproject commit d0133c23011b044b72240f9e0650307f1898dfcd
-diff --git a/base b/base
-new file mode 120000
-index 0000000..189af03
---- /dev/null
-+++ b/base
-@@ -0,0 +1 @@
-+../fm1-base
-\ No newline at end of file
 diff --git a/docs/MANUAL.md b/docs/MANUAL.md
-index 30e7f07..6b6578d 100644
+index 30e7f07..6b2d88c 100644
 --- a/docs/MANUAL.md
 +++ b/docs/MANUAL.md
 @@ -60,9 +60,11 @@ black keys 1 to 11.
@@ -578,7 +561,7 @@ index 30e7f07..6b6578d 100644
  | 15 | flam: a soft grace hit, then the step's own a moment later | 1 to 9 32nds of a step apart |
  
 -For the three skips, the value continues past random: the same cycles come round again, first playing every pass
-+A step whose tonality is **ignore** follows nothing: the conductor's chord, the harmonizer's included, leaves its
++A step whose tonality is **ignore** follows nothing: the conductor's chord, harmony's included, leaves its
 +notes as they are. For the three skips, the value continues past random: the same cycles come round again, first playing every pass
  but the last, then playing only the first. A new trick starts at its default: pulse and hold 4, multiply 2,
  velocity 64, the ramps and random 4, glide 40 %, bend down-up, tonality fifth up, jump forward, the skips a
@@ -602,7 +585,7 @@ index 30e7f07..6b6578d 100644
 +  routing: black keys 1 to 8 toggle a track. Its **SEL** list sets how each track follows: **no**, **diatonic**
 +  (moves by the chord's scale degree), **transpose** (the same distance in semitones), **harmony** (each note snaps
 +  to the nearest tone of the chord itself) or **ch. deg** (the note's place in the scale picks a chord tone:
-+  root, third, fifth, ... cycled, kept in the note's octave). The last two are the harmonizer. The conductor's
++  root, third, fifth, ... cycled, kept in the note's octave). The last two are harmony. The conductor's
 +  Engine page shows the chord it hears beside the degree. Drum tracks never follow.
  
    Page 3, **Follow**, takes the chords from a track instead. Press that track's black key (press it again to turn
@@ -623,14 +606,14 @@ index 30e7f07..6b6578d 100644
    weave on and another tap turns it off. Each track weaves as its ARP's Weave page sets it, and REC records the
    weaves onto the WEAVE steps. See Weave, above.
 diff --git a/tests/host/seq_test.c b/tests/host/seq_test.c
-index 86d0403..f5c588f 100644
+index 86d0403..dc51b73 100644
 --- a/tests/host/seq_test.c
 +++ b/tests/host/seq_test.c
 @@ -1211,6 +1211,99 @@ static void t_follow(void)             /* the conductor's FOLLOW track: its lowe
      printf("ok %s\n", cur);
  }
  
-+static void t_harmony(void)            /* the harmonizer: the conductor's chord sets the followers' pitches */
++static void t_harmony(void)            /* harmony: the conductor's chord sets the followers' pitches */
 +{
 +    cur = "harmony";
 +    /* the conductor's step holds a C major triad; "harmony" takes each note to the nearest tone */
@@ -713,7 +696,7 @@ index 86d0403..f5c588f 100644
 +    reset();
 +    par[0][TP_BRAIN] = BM_HARMONY;
 +    start();
-+    S.brain_chord = 0;                /* (an empty chord: as before the harmonizer) */
++    S.brain_chord = 0;                /* (an empty chord: as before harmony) */
 +    seq_key(&S, 0, 62, 1, 100);       /* D: C E G would take it down to C */
 +    seq_keys_live(&S, 0, &sink);
 +    CHECK(on_n(0) && on_n(0)->a == 62);
@@ -736,11 +719,11 @@ index 86d0403..f5c588f 100644
      t_velocity();
 diff --git a/tests/scenarios/harmony.xy b/tests/scenarios/harmony.xy
 new file mode 100644
-index 0000000..0529d37
+index 0000000..e777a1b
 --- /dev/null
 +++ b/tests/scenarios/harmony.xy
 @@ -0,0 +1,31 @@
-+# the harmonizer: a follower takes its pitches from the conductor's chord instead of the scale
++# harmony: a follower takes its pitches from the conductor's chord instead of the scale
 +wait 200
 +turn ALGO 1
 +expect trk 2
@@ -767,7 +750,7 @@ index 0000000..0529d37
 +play 9 60 off
 +play 9 64 off
 +play 9 67 off
-+# the routing page: a bar marks the harmonizer's modes
++# the routing page: a bar marks the harmony modes
 +turn SELECT 1
 +wait 40
 +shot harmony_routing.png

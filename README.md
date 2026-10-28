@@ -636,13 +636,10 @@ patches/
   fm1-loom/05-step-sel-list/        ui.c: SELECT moves a held step's SEL list (the lock editor no
                                     longer keeps it), and letting the step go closes the list
                                     instead of switching it to the pattern's (§7, bugs 4-5)
-  fm1-loom/06-harmonizer/           seq.c, synth.h: the chord the conductor plays, kept whole in one
+  fm1-loom/06-harmony/              seq.c, synth.h: the chord the conductor plays, kept whole in one
                                     word; follow modes "harmony" (nearest chord tone) and "chord deg"
                                     (the scale's degree picks a chord tone); no format change
-  fm1-loom/07-domino/               seq.c, pattern.c: a fifth weave rule, "domino": the track's hits are
-                                    the triggers and the woven pattern's notes advance one per hit, each
-                                    at its own length; no format change
-  fm1-loom/08-random/               seq.c, pattern.c, synth.c: the random player, eight randomization knobs
+  fm1-loom/07-random/               seq.c, pattern.c, synth.c: the random player, eight randomization knobs
                                     over the track's own grid; the steps as active slots (with none set, all
                                     play); a per-pattern pitch pool picked on the piano mock, in-scale dots
                                     from the follow mode; no format change (a pseudo-lane)
@@ -744,6 +741,12 @@ Regenerating an existing one: delete the old `.patch` files in that problem dire
 
 If `git am` stops inside a clone (a patch that neither applies nor is applied), the clone is left
 mid-session: `git -C clones/<repo> am --abort` (and `am --show-current-patch` to see where).
+
+`patches/` is the source of truth, `clones/` only a working copy: after committing in a clone, export
+the commit into its problem directory (`git -C clones/<repo> format-patch -1 <commit> -o patches/<repo>/NN-name`),
+and run `./scripts/check-patches.sh [repo]`, which compares the clone's own commits with the patch files
+by patch-id and reports any that are missing, stale or uncommitted. Do not commit generated files
+(`app/web/words/*.json` of an upstream release) or the `base` symlink in a clone.
 
 Not every commit ahead is a reason to move a pin: Felucca-Engines follows Felucca's own submodule
 pointer and fm1-base follows its own `main`, not either firmware's (`§3` has each pin's rationale).
