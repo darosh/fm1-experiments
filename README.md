@@ -642,6 +642,10 @@ patches/
   fm1-loom/07-domino/               seq.c, pattern.c: a fifth weave rule, "domino": the track's hits are
                                     the triggers and the woven pattern's notes advance one per hit, each
                                     at its own length; no format change
+  fm1-loom/08-random/               seq.c, pattern.c, synth.c: the random player, eight randomization knobs
+                                    over the track's own grid; the steps as active slots (with none set, all
+                                    play); a per-pattern pitch pool picked on the piano mock, in-scale dots
+                                    from the follow mode; no format change (a pseudo-lane)
   fm1-amb/01-usb-host-compat/       AMB-1's: the same descriptor set, and its USB names
   frasil/01-usb-host-compat/        FRASIL's: the same descriptor set, and its USB names
   felucca/01-usb-host-compat/       usb.c: MIDI behind the streams, the audio IAD, a serial; descriptor test
