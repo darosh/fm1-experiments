@@ -1,4 +1,4 @@
-From 12de335aa3b6dac460d54973eb581eda75581d5f Mon Sep 17 00:00:00 2001
+From f5c7d7eaf90140a6c3330e5fe41783a558c325ad Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
 Date: Wed, 28 Oct 2026 08:25:00 +0100
 Subject: [PATCH] LOOM-8: random. A new player: every step of the track's own
@@ -15,29 +15,29 @@ Subject: [PATCH] LOOM-8: random. A new player: every step of the track's own
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>
 ---
- app/dsp/synth.c               |  14 ++-
- app/dsp/synth.h               |   5 +-
+ app/dsp/synth.c               |  15 ++-
+ app/dsp/synth.h               |  14 ++-
  app/host.c                    |  14 +++
- app/pages.c                   | 131 ++++++++++++++++++++++---
+ app/pages.c                   | 131 +++++++++++++++++++++++---
  app/seq/pattern.c             |  31 +++++-
- app/seq/pattern.h             |  12 ++-
- app/seq/seq.c                 | 173 +++++++++++++++++++++++++++++++++-
+ app/seq/pattern.h             |  14 ++-
+ app/seq/seq.c                 | 172 +++++++++++++++++++++++++++++++++-
  app/seq/seq.h                 |  20 ++++
  app/ui.c                      |  54 +++++++++--
  app/web/words/5909c55163.json |   1 +
  app/words.tsv                 |   1 +
- docs/MANUAL.md                |  25 ++++-
- tests/host/seq_test.c         | 132 ++++++++++++++++++++++++++
- tests/host/synth_test.c       |   7 ++
- tests/scenarios/random.xy     |  46 +++++++++
+ docs/MANUAL.md                |  29 +++++-
+ tests/host/seq_test.c         | 163 ++++++++++++++++++++++++++++++++
+ tests/host/synth_test.c       |  18 ++++
+ tests/scenarios/random.xy     |  65 +++++++++++++
  tools/layout_sweep.py         |   2 +-
  tools/make_manual.py          |  14 ++-
- 17 files changed, 645 insertions(+), 37 deletions(-)
+ 17 files changed, 720 insertions(+), 38 deletions(-)
  create mode 100644 app/web/words/5909c55163.json
  create mode 100644 tests/scenarios/random.xy
 
 diff --git a/app/dsp/synth.c b/app/dsp/synth.c
-index 6bc4874..98a54a0 100644
+index 483a232..07764fd 100644
 --- a/app/dsp/synth.c
 +++ b/app/dsp/synth.c
 @@ -83,7 +83,7 @@ static const char *const LDEST_N[NLD] = {"synth", "envelope", "filter", "voice",
@@ -49,16 +49,17 @@ index 6bc4874..98a54a0 100644
  static const char *const ARPSPD_N[9] = {"1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T", "1/64"};
  static const char *const ARPPAT_N[6] = {"up", "down", "bounce", "bounce+", "played", "random"};
  static const char *const ARPLEN_N[3] = {"short", "medium", "long"};
-@@ -3058,6 +3058,16 @@ static const tp_info_t MIDI_CC_P[8] = {{"knob 1", 0, NMIDI_CC - 1, 74, PK_NUM, 0
+@@ -3083,6 +3083,17 @@ static const tp_info_t MIDI_CC_P[8] = {{"knob 1", 0, NMIDI_CC - 1, 74, PK_NUM, 0
  static const char *const MIDI_CC_N[NMIDI_CC] = {"cc 0", "cc 1", "cc 2", "cc 3", "cc 4", "cc 5", "cc 6", "cc 7", "cc 8", "cc 9", "cc 10", "cc 11", "cc 12", "cc 13", "cc 14", "cc 15", "cc 16", "cc 17", "cc 18", "cc 19", "cc 20", "cc 21", "cc 22", "cc 23", "cc 24", "cc 25", "cc 26", "cc 27", "cc 28", "cc 29", "cc 30", "cc 31", "cc 32", "cc 33", "cc 34", "cc 35", "cc 36", "cc 37", "cc 38", "cc 39", "cc 40", "cc 41", "cc 42", "cc 43", "cc 44", "cc 45", "cc 46", "cc 47", "cc 48", "cc 49", "cc 50", "cc 51", "cc 52", "cc 53", "cc 54", "cc 55", "cc 56", "cc 57", "cc 58", "cc 59", "cc 60", "cc 61", "cc 62", "cc 63", "cc 64", "cc 65", "cc 66", "cc 67", "cc 68", "cc 69", "cc 70", "cc 71", "cc 72", "cc 73", "cc 74", "cc 75", "cc 76", "cc 77", "cc 78", "cc 79", "cc 80", "cc 81", "cc 82", "cc 83", "cc 84", "cc 85", "cc 86", "cc 87", "cc 88", "cc 89", "cc 90", "cc 91", "cc 92", "cc 93", "cc 94", "cc 95", "cc 96", "cc 97", "cc 98", "cc 99", "cc 100", "cc 101", "cc 102", "cc 103", "cc 104", "cc 105", "cc 106", "cc 107", "cc 108", "cc 109", "cc 110", "cc 111", "cc 112", "cc 113", "cc 114", "cc 115", "cc 116", "cc 117", "cc 118", "cc 119"};
  static const tp_info_t STRUM_P[4] = {{"roll", 0, 63, 30, PK_NUM, 0}, {"pattern", 0, 3, 0, PK_NAMES, MPAT_N},
                                         {"-", 0, 0, 0, PK_NUM, 0}, {"hold", 0, 1, 0, PK_SWITCH, 0}};
 +/* random: P1..P4 page 1 (TP_P1..TP_AP4 are contiguous); AP1..AP4 page 2 (seq.c rand_notes) */
++static const char *const RAND_OCT_NAMES[RAND_OCT_N] = {"-3/+3", "-2/+3", "-1/+3", "-3/+2", "-2/+2", "-1/+2", "-3/+1", "-2/+1", "-1/+1", "-3/0", "-2/0", "-1/0", "0", "0/+1", "0/+2", "0/+3", "-1/+1", "-1/+2", "-1/+3", "-2/+1", "-2/+2", "-2/+3", "-3/+1", "-3/+2", "-3/+3"};
 +static const tp_info_t RAND_P[8] = {
 +    {"note %", 0, 127, 64, PK_PCT, 0},   /* P1: chance a grid step sounds */
 +    {"pitch %", 0, 127, 32, PK_PCT, 0},  /* P2: chance the pitch phrase re-rolls each cycle */
 +    {"rhythm %", 0, 127, 32, PK_PCT, 0}, /* P3: chance the rhythm phrase re-rolls each cycle */
-+    {"octave", 1, 4, 1, PK_NUM, 0},      /* P4: random octave span above the base register */
++    {"octave", 0, RAND_OCT_N - 1, RAND_OCT_CENTRE, PK_NAMES, RAND_OCT_NAMES},   /* P4: the octave range (synth.h) */
 +    {"time %", 0, 127, 0, PK_PCT, 0},    /* AP1: chance the next step is pushed late */
 +    {"length", 1, 64, 16, PK_NUM, 0},    /* AP2: the generator cycle in grid steps */
 +    {"vel %", 0, 127, 0, PK_PCT, 0},     /* AP3: chance the velocity is scaled */
@@ -66,7 +67,7 @@ index 6bc4874..98a54a0 100644
  /* the LFO's knobs per type (synth.h): speed / amount / dest / x / x2 */
  static const tp_info_t LFO_SPEED_DUCK = {"source", 0, DUCK_METRO, 0, PK_NAMES, DUCK_N};
  static const tp_info_t LFO_AMT[NLT] = {{"-", 0, 0, 0, PK_NUM, 0}, {"amount", 0, 127, 64, PK_BIP, 0},
-@@ -3202,6 +3212,8 @@ const tp_info_t *tp_info_par(int p, const uint8_t *par)
+@@ -3227,6 +3238,8 @@ const tp_info_t *tp_info_par(int p, const uint8_t *par)
              return &FIXED[p];
          if (player == PL_STRUM && p <= TP_P4)
              return &STRUM_P[p - TP_P1];
@@ -76,10 +77,26 @@ index 6bc4874..98a54a0 100644
      }
      if (tp_is_dkey(p)) {
 diff --git a/app/dsp/synth.h b/app/dsp/synth.h
-index 37e0427..873f848 100644
+index fad00c7..27e0b36 100644
 --- a/app/dsp/synth.h
 +++ b/app/dsp/synth.h
-@@ -175,12 +175,13 @@ enum { GD_CUT, GD_RES, GD_PITCH, GD_PAN, GD_VOL, GD_SEND1, GD_SEND2, GD_CHAR, NG
+@@ -96,6 +96,15 @@ enum {
+     NTP
+ };
+ _Static_assert(NTP <= 511, "a parameter's index: nine bits in the engine's queue (engine.c cq_put); a lane's is 16");
++/* the random player's octave range (TP_P4): how many octaves below (lo) and above (hi) the step's own a note may land,
++ * each 0..3. One knob walks the 16 pairs on a path about its centre (12, 0/0: the step's own octave only): turned
++ * right the upper bound grows first (0/+1 .. 0/+3, then -1/+1 .. -3/+3), turned left the lower one (-1/0 .. -3/0, then
++ * -1/+1 .. -3/+3); the pairs with both bounds are on both sides. Indexed by the knob's value 0..24 (left to right) */
++#define RAND_OCT_N 25
++#define RAND_OCT_CENTRE 12
++static const int8_t RAND_OCT[RAND_OCT_N][2] = {{3,3},{2,3},{1,3},{3,2},{2,2},{1,2},{3,1},{2,1},{1,1},{3,0},{2,0},{1,0},{0,0},{0,1},{0,2},{0,3},{1,1},{1,2},{1,3},{2,1},{2,2},{2,3},{3,1},{3,2},{3,3}};
++static inline int rand_oct_lo(int v) { return RAND_OCT[v < 0 ? 0 : v >= RAND_OCT_N ? RAND_OCT_N - 1 : v][0]; }
++static inline int rand_oct_hi(int v) { return RAND_OCT[v < 0 ? 0 : v >= RAND_OCT_N ? RAND_OCT_N - 1 : v][1]; }
+ /* how a track follows the conductor (TP_BRAIN): 0 and 1..2 are saved before harmony and keep their meaning;
+  * 3 and 4 are appended (append only: a project stores the byte). 3 "harmony" takes each note to the nearest tone of
+  * the active chord; 4 "ch. deg" takes the note's place in the scale to pick a chord tone. See seq.c brain_note */
+@@ -175,12 +184,13 @@ enum { GD_CUT, GD_RES, GD_PITCH, GD_PAN, GD_VOL, GD_SEND1, GD_SEND2, GD_CHAR, NG
  #define SY_GLFO_TRK NTRK                         /* the track holding its knobs: the conductor (pattern.h AUX_BRAIN) */
  enum { LD_SYNTH, LD_ENV, LD_FILTER, LD_AMP, LD_FREE = 4, NLD = 8 };   /* TP_LDEST: module (LD_AMP: "voice"), + LD_FREE = free-running */
  #define LS_SYNC_N 8                                /* TP_LSPEED values below this are synced divisions */
@@ -96,10 +113,10 @@ index 37e0427..873f848 100644
  /* how a value is shown: a number, a percentage, bipolar (64 = 0), a name from the list, semitones, on / off,
   * milliseconds / seconds, the LFO speed (a division or Hz), 00..99 (the engine knobs),
 diff --git a/app/host.c b/app/host.c
-index 45daefd..29b5666 100644
+index 7ba1953..a6ba5a5 100644
 --- a/app/host.c
 +++ b/app/host.c
-@@ -615,6 +615,20 @@ static int expect_more(const char *what, const char *a, const char *b, const cha
+@@ -626,6 +626,20 @@ static int expect_more(const char *what, const char *a, const char *b, const cha
              host_fails++;
          } else
              printf("  ok note %s %s %s == %d\n", t, pt, st, got);
@@ -121,10 +138,10 @@ index 45daefd..29b5666 100644
          char t[16] = {0}, pt[16] = {0}, pn[24] = {0}, nv[16] = {0};
          int ln, got = 0;
 diff --git a/app/pages.c b/app/pages.c
-index 1323427..39cb680 100644
+index 23bb6b5..a2a8e77 100644
 --- a/app/pages.c
 +++ b/app/pages.c
-@@ -207,6 +207,8 @@ static struct {
+@@ -216,6 +216,8 @@ static struct {
                                                        * it turned on), in chord_bar of pattern chord_pat: a scene
                                                        * change while it is on moves neither */
      uint8_t chord_bar, chord_pat;
@@ -133,7 +150,7 @@ index 1323427..39cb680 100644
      uint8_t chord_down;                              /* chord mode: the chord's keys still down (0: the next key
                                                        * starts a fresh chord, replacing the held steps' notes) */
      uint16_t wv_held, wv_latched;                    /* the WEAVE track's keys: the tracks woven now (seq.wv_live) */
-@@ -284,7 +286,7 @@ static struct {
+@@ -297,7 +299,7 @@ static struct {
  /* the undo: one stage, whatever was changed last (HOME + REC swaps it back, HOME + PLAY swaps again: redo): a
   * pattern with its locks, a track's sound (or T2-T8 at once), the master, or the arrangement (song, scenes, weave) */
  enum { U_PAT, U_SOUND, U_MASTER, U_ARR };
@@ -142,7 +159,7 @@ index 1323427..39cb680 100644
  static struct {
      uint8_t valid, redo, kind, trk, n, pt, nl, rsv;
      uint32_t t;
-@@ -556,6 +558,8 @@ static const char *page_name_of(int p, int trk)
+@@ -569,6 +571,8 @@ static const char *page_name_of(int p, int trk)
          return "Weave";
      if (trk == AUX_BRAIN && p == P_SUB)
          return "Follow";
@@ -151,7 +168,7 @@ index 1323427..39cb680 100644
      if (trk < NTRK && p == P_SUB && proj.trk[trk].par[TP_ENGINE] == EG_SAMPLE)
          return "Loop";
      if ((is_drum(trk) || is_midi(trk)) && p == P_SUB)
-@@ -629,7 +633,9 @@ static int group_n(int g)
+@@ -644,7 +648,9 @@ static int group_n(int g)
               : x_page(trk) ? 4 : 3;      /* (a kit: Engine, Key, Sends: the key's own; Engine 2 after Engine when the
                                            * key's model has eight knobs) */
      if (b == B_ARP)                                  /* (grp_page: Players, Players 2, Hold the arp's, Weave) */
@@ -162,7 +179,7 @@ index 1323427..39cb680 100644
      if (b == B_ENV)
          return is_drum(trk) ? 4 : is_midi(trk) ? 1 : 3;   /* a kit: the key's envelope, filter; the kit's envelope,
                                                             * filter (a MIDI track: none, page_button stays) */
-@@ -671,7 +677,7 @@ static int grp_page(int g, int i)
+@@ -686,7 +692,7 @@ static int grp_page(int g, int i)
              return P_WEAVE;
          if (is_drum(trk) || pl_type(trk) == PL_OFF)
              return i & 1 ? P_WEAVE : P_PLAYERS;      /* (a kit, or no player: its page shows it off, then Weave) */
@@ -171,7 +188,7 @@ index 1323427..39cb680 100644
      }
      return PAGE_BTN[g].first + i;
  }
-@@ -750,6 +756,14 @@ static int tp_page_param(int p, int k, int trk)
+@@ -765,6 +771,14 @@ static int tp_page_param(int p, int k, int trk)
          return TP_O2FINE;                            /* knit's osc 2 with HOME held: its fine tune, in cents */
      if (is_drum(trk) && (p == P_PLAYERS || p == P_PLAYERS2 || p == P_PLAYERS3))
          return -1;                                   /* a kit: no player (its page shows it off) */
@@ -186,7 +203,7 @@ index 1323427..39cb680 100644
      if (p == P_PLAYERS2 && pl_type(trk) != PL_ARP)
          return k == 0 ? TP_P4 : -1;
      if (p == P_PLAYERS3 && pl_type(trk) != PL_ARP)
-@@ -1167,7 +1181,9 @@ static void step_knobs(knob_t *k)
+@@ -1341,7 +1355,9 @@ static void step_knobs(knob_t *k)
          int n = 0;
          for (int i = 0; i < SN && !n; i++)
              n = st->note[i];
@@ -197,7 +214,7 @@ index 1323427..39cb680 100644
              note_name(n, t);
          else
              s_cat(t, "-");
-@@ -1694,7 +1710,7 @@ static void page_footer(char *t)
+@@ -1872,7 +1888,7 @@ static void page_footer(char *t)
          else if (ui.trickpg)
              s_cat(t, "KNOB 1 3 trick|KNOB 2 4 value");
          else if (ui.chordmode && ui.page == P_STEPS)
@@ -206,7 +223,7 @@ index 1323427..39cb680 100644
          else if (ui.len_key && (ui.held >> (ui.len_key - 1) & 1u))
              s_cat(t, "let go: length|KNOBS both steps");
          else if (ui.held && is_drum(trk))
-@@ -1761,6 +1777,8 @@ static void page_footer(char *t)
+@@ -1939,6 +1955,8 @@ static void page_footer(char *t)
              s_cat(t, "KEY strums the chord|KEYS together: a new chord");
          else if (ui.page >= P_PLAYERS && ui.page <= P_PLAYERS3 && pl_type(trk) == PL_ARP)
              s_cat(t, "KEYS hold notes: they arpeggiate");
@@ -215,7 +232,7 @@ index 1323427..39cb680 100644
          else if (is_drum(trk) && ui.page == P_FILTER)
              s_cat(t, "PRESET type|BLACK pick a key");
          else if (is_drum(trk) && (ui.page == P_ENV2 || ui.page == P_KITF))
-@@ -2017,8 +2035,8 @@ static const struct { uint8_t btn; uint32_t pages; const char *title, *l1, *l2;
+@@ -2195,8 +2213,8 @@ static const struct { uint8_t btn; uint32_t pages; const char *title, *l1, *l2;
      {B_FX, PG_ANY, "Effects", "Character, sends, FX I, FX II, then Throws: keys fire effects.",
       "PRESETS: the type or effect. SEL: an FX's filter."},
      {B_LFO, PG_ANY, "LFO", "Type, then its first three knobs.", "Page 2 has the type's fourth and fifth."},
@@ -225,8 +242,8 @@ index 1323427..39cb680 100644
 +     "Random: tap steps as active slots; SEQ picks the pool."},
      {B_ARP, PG_STEPS, "Tricks", "With a step held, ARP: KNOB 1 and 3 pick its two tricks,",
       "KNOB 2 and 4 their values. Let go of the step when done."},
-     {B_GLO, PG_ANY, "Mix", "Sends, pan, level. Black: tap mutes, hold solos (more: more).",
-@@ -2467,6 +2485,8 @@ static void list_build(void)
+     {B_GLO, PG_ANY, "Mix", "Sends, pan, level. Black: tap mute, hold solo, 2 taps: stays.",
+@@ -2645,6 +2663,8 @@ static void list_build(void)
                  s_cat(e, DL_SOUND_NAME[(st->note[i] - 1) % DL_NSOUND]);
              else if (trk == AUX_PUNCH)
                  s_cat(e, PX_VALID(st->note[i] - 1) ? PUNCH_NAME[(st->note[i] - 1) & 15] : "fx");
@@ -235,7 +252,7 @@ index 1323427..39cb680 100644
              else
                  note_name(st->note[i], e);
              list_add(rm[i], 0, LK_ACTION, A_REMOVE_NOTE);
-@@ -2972,7 +2992,7 @@ static void draw_steps(void)
+@@ -3150,7 +3170,7 @@ static void draw_steps(void)
          else {
              char *e = t;
              *e = 0;
@@ -244,7 +261,7 @@ index 1323427..39cb680 100644
                  if (i)
                      e = s_cat(e, " ");
                  e = note_name(ui.rem[i], e);
-@@ -3009,12 +3029,13 @@ static void draw_steps(void)
+@@ -3187,13 +3207,14 @@ static void draw_steps(void)
          }
      }
      for (int i = 0; i < 16; i++) {
@@ -253,6 +270,7 @@ index 1323427..39cb680 100644
          const step_t *st = &tp->st[s];
          int32_t x = ST_X + (i % 8) * ST_CW, y = ST_Y + (i / 8) * (ST_CH + 4);
          uint16_t bg, fg;
+         hit_t hm;
 -        on = step_on(st, trk);
 -        bg = !in ? K_BG : on ? K_TINT : K_PANEL;
 +        on = in && (pl_type(trk) == PL_RAND ? step_slot_on(tp, s) : step_on(st, trk));
@@ -261,7 +279,7 @@ index 1323427..39cb680 100644
          if (playing() && s == ph && in)
              bg = on ? K_NOW : K_NOW_T;
          fg = bg == K_NOW ? K_BG : K_TEXT;
-@@ -3053,7 +3074,9 @@ static void draw_steps(void)
+@@ -3232,7 +3253,9 @@ static void draw_steps(void)
              }
          } else if (on) {
              uint16_t dim = bg == K_NOW ? K_BG : K_DIM;
@@ -272,7 +290,7 @@ index 1323427..39cb680 100644
                  int fx = st->note[0] - 1;
                  /* the effect in capitals (no descender to meet the line under it), three letters, over its group */
                  static const char *const PX_CELL[NPUNCH] = {"MUT", "STU", "REP", "ECH", "BLD", "FLR", "JMB", "WBL",
-@@ -4450,6 +4473,8 @@ static void draw_players(void)
+@@ -4630,6 +4653,8 @@ static void draw_players(void)
          cv_text(12, 24, &FONT_XS, "held notes play one after another", K_DIM);
      else if (pl == PL_STRUM)
          cv_text(12, 24, &FONT_XS, "one key strums the chord; keys together set it", K_DIM);
@@ -281,7 +299,7 @@ index 1323427..39cb680 100644
      else
          cv_text(12, 24, &FONT_XS, "notes stay until the next", K_DIM);
      e = s_cat(t, pl == PL_STRUM ? "chord: " : "held: ");
-@@ -4505,6 +4530,83 @@ static void draw_players(void)
+@@ -4685,6 +4710,83 @@ static void draw_players(void)
      }
      cv_blit(0, MAIN_Y);
  }
@@ -365,7 +383,7 @@ index 1323427..39cb680 100644
  /* chord mode (a step held, SEQ tapped), on Steps: the keys are a keyboard (Players') writing the held step's chord
   * instead of playing it. Shown in red (K_REC), as every lock is: the step's own notes lit in the track's ink, a key
   * still down bright, so the chord being built is always legible, not "in limbo" */
-@@ -5001,7 +5103,10 @@ static void draw_page(void)
+@@ -5184,7 +5286,10 @@ static void draw_page(void)
      case P_SONG: draw_song(); break;
      case P_STEPS:
          if (ui.chordmode && is_seqt(trk) && !is_drum(trk))
@@ -378,7 +396,7 @@ index 1323427..39cb680 100644
              draw_steps();
          break;
 diff --git a/app/seq/pattern.c b/app/seq/pattern.c
-index 558d0fb..0f72607 100644
+index 2709905..eb837b5 100644
 --- a/app/seq/pattern.c
 +++ b/app/seq/pattern.c
 @@ -56,6 +56,8 @@ int lane_find(const lane_t *L, int trk, int pat, int param)
@@ -408,7 +426,7 @@ index 558d0fb..0f72607 100644
  }
  
  int lane_count(const lane_t *L)
-@@ -125,6 +130,30 @@ int step_vel(const lane_t *L, int trk, int pat, int step, int sound)
+@@ -138,6 +143,30 @@ const hit_t *step_hit(const patterns_t *P, int trk, int pat, int step, int sound
      return 0;
  }
  
@@ -440,20 +458,23 @@ index 558d0fb..0f72607 100644
  {
      int k;
 diff --git a/app/seq/pattern.h b/app/seq/pattern.h
-index 8294147..5c710e5 100644
+index 9d8612b..1d4d635 100644
 --- a/app/seq/pattern.h
 +++ b/app/seq/pattern.h
-@@ -122,10 +122,17 @@ static inline void pat_loop(const tpat_t *p, int *from, int *to)
- #define LANE_TUNE 0xFFFEu                     /* (past every parameter: synth.h NTP) */
- #define LANE_VEL0 0xFF00u                     /* a kit step's own velocity for sound k: lane LANE_VEL0 + k (k 0..10; none:
-                                                * the step's velocity), only where a sound of a step has its own */
--static inline int lane_is_note(unsigned param)   /* a lane of notes (a kit's tunes, its sounds' velocities), not locks */
+@@ -126,12 +126,19 @@ static inline void pat_loop(const tpat_t *p, int *from, int *to)
+  * project's hit settings (patterns_t hit[]) for each step; none (LOCK_NONE): the step's own cond and tricks. A sound
+  * with its own plays by them alone; the step's sounds without their own play by the step's, together, as before */
+ #define LANE_HIT0 0xFF10u
+-static inline int lane_is_note(unsigned param)   /* a lane of notes (a kit's tunes, its sounds' velocities and hit
+-                                                  * settings), not locks */
 +#define LANE_POOL 0xFFFDu                     /* a random track's pattern: its pitch-class pool, val[0] | val[1] << 8
 +                                               * (12 bits), one lane for the whole pattern (seq.c rand_pool) */
-+static inline int lane_is_step_note(unsigned param)   /* a lane of a step's notes (a kit's tunes, its sounds' velocities) */
++static inline int lane_is_step_note(unsigned param)   /* a lane of a step's notes (a kit's tunes, its sounds' velocities
++                                                       * and hit settings) */
  {
-     return param == LANE_TUNE || (param >= LANE_VEL0 && param < LANE_VEL0 + 16u);
+     return param == LANE_TUNE || (param >= LANE_VEL0 && param < LANE_VEL0 + 32u);
  }
+ static inline int lane_is_hit(unsigned param) { return param >= LANE_HIT0 && param < LANE_HIT0 + NDRUM; }
 +static inline int lane_is_pool(unsigned param) { return param == LANE_POOL; }
 +static inline int lane_is_note(unsigned param)   /* a lane of notes, not locks (project keeps these) */
 +{
@@ -462,10 +483,10 @@ index 8294147..5c710e5 100644
  #define TUNE_0 64
  #define TUNE_MAX 24
  typedef struct {
-@@ -206,6 +213,9 @@ int step_has_lock(const lane_t *L, int trk, int pat, int step);
- void step_clear_locks(lane_t *L, int trk, int pat, int step);
- int step_tune(const lane_t *L, int trk, int pat, int step);       /* a drum step's note: semitones, 0 = none */
+@@ -223,6 +230,9 @@ int step_tune(const lane_t *L, int trk, int pat, int step);       /* a drum step
  int step_vel(const lane_t *L, int trk, int pat, int step, int sound);   /* a kit step's sound's own velocity, 0 = none */
+ /* a kit step's sound (0..10)'s own hit settings, 0 = none (it plays by the step's) */
+ const hit_t *step_hit(const patterns_t *P, int trk, int pat, int step, int sound);
 +uint16_t lane_pool_get(const lane_t *L, int trk, int pat);              /* a random pattern's pool mask, 0 none */
 +int lane_pool_set(lane_t *L, int trk, int pat, uint16_t mask);          /* -1 = no lane free */
 +extern volatile uint16_t lane_epoch;     /* bumped when a lane is allocated or freed (the ISR's pool cache) */
@@ -473,10 +494,10 @@ index 8294147..5c710e5 100644
  void cond_ab(int k, int *a, int *b);  /* COND_AB + k -> A:B */
  /* a weave: pattern a (the track's) crossed with b (WITH). weave_step: the step the weave plays at pos, the track's
 diff --git a/app/seq/seq.c b/app/seq/seq.c
-index cb31c6c..507f92c 100644
+index ec9ede4..928874c 100644
 --- a/app/seq/seq.c
 +++ b/app/seq/seq.c
-@@ -742,6 +742,147 @@ static void emit_note(seq_t *s, int t, int note, int vel, int glide_ms, uint32_t
+@@ -742,6 +742,146 @@ static void emit_note(seq_t *s, int t, int note, int vel, int glide_ms, uint32_t
      add_off(s, t, tag, OFF_NOTE, note, len_q8, o);
  }
  
@@ -549,13 +570,13 @@ index cb31c6c..507f92c 100644
 +    if (++tr->st_cyc >= len)
 +        rand_wrap(s, t);
 +}
-+/* a random step's note: one pitch class from the pool, an octave in the span, the knobs' velocity and gate */
++/* a random step's note: one pitch class from the pool, an octave in the range, the knobs' velocity and gate */
 +static void rand_notes(seq_t *s, int t, const step_t *st, int p, int ratchet, int vel, uint32_t len_q8, int glide,
 +                        const seq_sink_t *o)
 +{
 +    seq_trk_t *tr = &s->t[t];
 +    const uint8_t *par = s->par[t];
-+    int src = st->note[0] ? st->note[0] : 60, pc = -1, oct, span = par[TP_P4], note;
++    int src = st->note[0] ? st->note[0] : 60, pc = -1, lo, oct, note;
 +    uint32_t tag;
 +    if (tr->st_cover) {                       /* a pulse's covered step: the note that fired stays */
 +        if (!tr->st_last_note)
@@ -584,10 +605,9 @@ index cb31c6c..507f92c 100644
 +        }
 +        if (pc < 0)
 +            pc = src % 12;
-+        if (span < 1) span = 1;
-+        if (span > 4) span = 4;
-+        oct = (int)(st_rand(tr->st_seed_pit, tr->st_step, ST_OCT) % (uint32_t)span);
-+        note = (src / 12 + oct) * 12 + pc;    /* the slot's note sets the register (C4 for an implicit one) */
++        lo = rand_oct_lo(par[TP_P4]);
++        oct = (int)(st_rand(tr->st_seed_pit, tr->st_step, ST_OCT) % (uint32_t)(lo + rand_oct_hi(par[TP_P4]) + 1)) - lo;
++        note = clamp_note((src / 12 + oct) * 12 + pc);   /* the slot's note sets the register (C4 for an implicit one) */
 +        note = brain_note(s, t, note);        /* one pass, as any note the track plays */
 +        if (fx_on(s, t, PX_OCTAVE))
 +            note -= 12;
@@ -624,7 +644,7 @@ index cb31c6c..507f92c 100644
  /* a drum hit semi semitones from its key's pitch (a step's note), through the drum punch-in FX (pitch, short, long); len_q8 > 0 schedules its drum_off (the gated and
   * loop play modes end with it; a hit of the same sound under the same tag moves the off), 0 = the key holds it */
  /* a kit track's place among the kits (its scene mutes: kmute[kit_slot]), -1 past NKITM */
-@@ -932,6 +1073,10 @@ static void fire_notes(seq_t *s, int t, const step_t *st, int p, uint32_t L, int
+@@ -905,6 +1045,10 @@ static void fire_notes(seq_t *s, int t, const step_t *st, int p, uint32_t L, int
          if (pv < 8)                   /* 8 = off */
              glide = (int)((L >> 8) * (uint32_t)(pv * 10 + 10) / 4410u);   /* ms: samples * pct / 100 / 44.1 */
      }
@@ -635,7 +655,7 @@ index cb31c6c..507f92c 100644
      for (i = 0; i < SN; i++) {
          int note = st->note[i];
          uint32_t tag;
-@@ -1406,6 +1551,15 @@ static void track_reset(seq_t *s, int t)
+@@ -1390,6 +1534,15 @@ static void track_reset(seq_t *s, int t)
      tr->grid_h = tr->grid_len = 0;
      tr->origin_h8 = now_h8(s);
      tr->pass = 0;
@@ -650,20 +670,20 @@ index cb31c6c..507f92c 100644
 +    tr->st_last_note = 0;
      tr->stall = 0;
      tr->ratchet = tr->ratchets = 0;
-     tr->jump_to = 0xFF;
-@@ -1530,7 +1684,7 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
+     kit_rt_clear(s, t);
+@@ -1732,7 +1885,7 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
      const step_t *st;
      uint32_t L, carry = tr->to_next < SEQ_DUE ? tr->to_next : 0, nL;
      int p, wrapped = 0, retrig = 1, happens = 0, plays, np, dummy, trig_ok = 1, lock_ok = 1, kind, cover = 0, rep = 0,
--        fresh = 0, lp, drum = t < NTRK && is_drum(s, t);
-+        fresh = 0, lp, drum = t < NTRK && is_drum(s, t), rnd = rand_track(s, t);
+-        lp, drum = t < NTRK && is_drum(s, t);
++        lp, drum = t < NTRK && is_drum(s, t), rnd = rand_track(s, t);
      int32_t off, noff;
      if (!tr->started) {
          tr->started = 1;
-@@ -1603,12 +1757,17 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
+@@ -1805,12 +1958,17 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
       * (a jump works on an empty or muted step, which happens without playing) */
      if (retrig && trig_ok)
-         happens = cond_plays(s, t, st);
+         happens = cond_plays(s, t, st->cond);
 -    plays = happens && !(s->mute >> t & 1u) && !punch_muted(s, t) && !tr->fill_on && !step_empty(st);
 +    plays = happens && !(s->mute >> t & 1u) && !punch_muted(s, t) && !tr->fill_on &&
 +            (rnd ? step_slot_on(tp, cover ? lp : p) : !step_empty(st));
@@ -679,16 +699,16 @@ index cb31c6c..507f92c 100644
      if (plays) {
          if (kind && !rep) {           /* the trick's step: it covers the next n steps (a kit: its own sounds) */
              int cv = tr->act[kind] - 1, n = cv == SC_RANDOM_VAL ? 1 + (int)(rng_next(&tr->rng) % 9u) : cv + 1;
-@@ -1657,6 +1816,8 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
-     if (cover && drum && tr->stall_kind == SC_PULSE && tr->stall_vel && !(s->mute >> t & 1u) && !punch_muted(s, t) &&
-         !tr->fill_on)                 /* a kit's pulse: the trick's sounds again, on this step */
-         pulse_hits(s, t, L, o);
+@@ -1852,6 +2010,8 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
+             ghost_notes(s, t, st, o);
+     }
+ next:
 +    if (rnd)
 +        rand_end(s, t);              /* the generator moves on even through a rest or a mute */
      skip_clear(tr);
      if (!tr->stall)
          tr->stall_kind = 0;
-@@ -1668,6 +1829,8 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
+@@ -1863,6 +2023,8 @@ next:
          tr->jump_to = save_j;
      }
      noff = step_off(s, t, np, L);
@@ -697,7 +717,7 @@ index cb31c6c..507f92c 100644
      tr->off_q8 = noff;
      if (s->ext) {
          tr->to_next = NEVER;          /* the clock arms the next one */
-@@ -2245,6 +2408,11 @@ static void players_follow_par(seq_t *s, const seq_sink_t *o)
+@@ -2459,6 +2621,11 @@ static void players_follow_par(seq_t *s, const seq_sink_t *o)
              arp_stop(s, t, o);
              pl->nsroll = 0;
              pl->sroll_to_next = NEVER;
@@ -709,7 +729,7 @@ index cb31c6c..507f92c 100644
              pl->type_seen = (uint8_t)ty;
              pl->latch_seen = (uint8_t)la;
          } else if (la != pl->latch_seen) {
-@@ -2962,6 +3130,7 @@ void seq_init(seq_t *s, patterns_t *P, uint8_t (*par)[NTP_ALL])
+@@ -3193,6 +3360,7 @@ void seq_init(seq_t *s, patterns_t *P, uint8_t (*par)[NTP_ALL])
          tr->rng = 0x9E3779B9u * (uint32_t)(t + 1);
          tr->to_next = NEVER;
          tr->sub_to_next = NEVER;
@@ -718,7 +738,7 @@ index cb31c6c..507f92c 100644
          tr->bq_go = 0xFF;
          s->ppat[t] = P->scene[0].pat[t] < NPATT ? P->scene[0].pat[t] : 0;
 diff --git a/app/seq/seq.h b/app/seq/seq.h
-index 3a8869e..0a3f665 100644
+index 2e06a4f..5cff18f 100644
 --- a/app/seq/seq.h
 +++ b/app/seq/seq.h
 @@ -127,6 +127,13 @@ typedef struct {                      /* one track's runtime (interrupt only) */
@@ -735,7 +755,7 @@ index 3a8869e..0a3f665 100644
      uint32_t to_next;                 /* samples to the next step, Q8 */
      uint32_t step_q8;                 /* the current step's length (ratchets, bends) */
      uint32_t rng;
-@@ -355,3 +362,16 @@ int seq_step_add_notes(seq_t *s, int trk, int step, const uint8_t *notes, int n,
+@@ -371,3 +378,16 @@ int seq_step_add_notes(seq_t *s, int trk, int step, const uint8_t *notes, int n,
  void step_set_notes(step_t *st, const uint8_t *notes, int n, int vel);
  void step_toggle_note(step_t *st, int note);
  int step_empty(const step_t *st);
@@ -753,7 +773,7 @@ index 3a8869e..0a3f665 100644
 +    return !any || step_slot_set(p, s);
 +}
 diff --git a/app/ui.c b/app/ui.c
-index efd7b2e..da06f33 100644
+index c961def..04425fa 100644
 --- a/app/ui.c
 +++ b/app/ui.c
 @@ -223,6 +223,13 @@ static void set_tp(int trk, int p, int v)
@@ -761,7 +781,7 @@ index efd7b2e..da06f33 100644
      } else
          engine_set(trk, p, v);
 +    if (p == TP_PLAYER && !is_aux(trk) && !is_drum(trk) && v == PL_RAND) {
-+        static const uint8_t SD[8] = {64, 32, 32, 1, 0, 16, 0, 0};   /* note, pitch, rhythm, octave, time, length, vel, gate */
++        static const uint8_t SD[8] = {64, 32, 32, RAND_OCT_CENTRE, 0, 16, 0, 0};   /* note, pitch, rhythm, octave, time, length, vel, gate */
 +        for (int i = 0; i < 8; i++) {                                /* a new random track makes a phrase at once */
 +            par[TP_P1 + i] = SD[i];
 +            engine_set(trk, TP_P1 + i, SD[i]);
@@ -770,7 +790,7 @@ index efd7b2e..da06f33 100644
      if (is_aux(trk))
          apply_aux(trk);
      if (p == TP_BRAIN)
-@@ -697,7 +704,8 @@ static void step_toggle(int i)
+@@ -718,7 +725,8 @@ static void step_toggle(int i)
                  return;
              }
              one = ui.rem_fx;
@@ -780,7 +800,7 @@ index efd7b2e..da06f33 100644
          if (one)
              step_set_notes(st, &one, 1, 100);
          else
-@@ -1027,6 +1035,20 @@ static void step_chord_key_up(void)
+@@ -1082,6 +1090,20 @@ static void step_chord_key_up(void)
          ui.chord_down--;
  }
  
@@ -801,7 +821,7 @@ index efd7b2e..da06f33 100644
  /* ------------------------------------------------------------- keys --- */
  static void chord_add(int note)
  {
-@@ -1450,7 +1472,10 @@ static void key_down(int k)
+@@ -1507,7 +1529,10 @@ static void key_down(int k)
              ui.kmode[k] = KM_STEPCHORD;
              ui.knote[k] = (uint8_t)note;
              engine_key(trk, note, 1, 127);
@@ -813,7 +833,7 @@ index efd7b2e..da06f33 100644
              return;
          }
          if ((ui.btn >> B_SEQ & 1u) || ui.rec_armed || seq.rec || seq.rec_wait) {   /* a keyboard: SEQ held, recording */
-@@ -1592,7 +1617,8 @@ static void key_up(int k)
+@@ -1652,7 +1677,8 @@ static void key_up(int k)
          break;
      case KM_STEPCHORD:
          engine_key(trk, ui.knote[k], 0, 0);
@@ -823,7 +843,7 @@ index efd7b2e..da06f33 100644
          break;
      case KM_STEP: {
          int w = ordinal(WHITE_K, 16, k);
-@@ -2577,7 +2603,8 @@ static int paste_steps(int trk, int pt, int at, int from, int n, int locks_only)
+@@ -2674,7 +2700,8 @@ static int paste_steps(int trk, int pt, int at, int from, int n, int locks_only)
      int ok = 1;
      for (int k = 0; k < NLANE; k++) {
          lane_t *l = &pats.lane[k];
@@ -833,7 +853,7 @@ index efd7b2e..da06f33 100644
              for (int i = 0; i < n && at + i < NSTEP; i++)
                  if (!(clip_trk == trk && clip_pat == pt && at + i >= from && at + i < from + n))
                      l->val[at + i] = LOCK_NONE;
-@@ -2585,7 +2612,8 @@ static int paste_steps(int trk, int pt, int at, int from, int n, int locks_only)
+@@ -2682,7 +2709,8 @@ static int paste_steps(int trk, int pt, int at, int from, int n, int locks_only)
      for (int k = 0; k < NLANE; k++) {
          const lane_t *l = &pats.lane[k];
          int d;
@@ -843,7 +863,7 @@ index efd7b2e..da06f33 100644
              continue;
          d = lane_alloc(pats.lane, trk, pt, l->param);
          if (d < 0) {
-@@ -2649,7 +2677,7 @@ static void act_rotate(int d)
+@@ -2746,7 +2774,7 @@ static void act_rotate(int d)
          tp->st[n - 1] = keep;
      }
      for (int l = 0; l < NLANE; l++)
@@ -852,7 +872,7 @@ index efd7b2e..da06f33 100644
              uint8_t *v = pats.lane[l].val, k;
              if (d > 0) {
                  k = v[n - 1];
-@@ -2774,7 +2802,7 @@ static void act_clear_bar(void)
+@@ -2871,7 +2899,7 @@ static void act_clear_bar(void)
          tp->st[i].vel = 100;
      }
      for (int k = 0; k < NLANE; k++)
@@ -861,7 +881,7 @@ index efd7b2e..da06f33 100644
              for (int i = b * 16; i < b * 16 + 16; i++)
                  pats.lane[k].val[i] = LOCK_NONE;
      mark_dirty();
-@@ -2867,7 +2895,7 @@ static void act_double(void)                     /* the pattern twice as long, p
+@@ -2964,7 +2992,7 @@ static void act_double(void)                     /* the pattern twice as long, p
      for (int i = 0; i < n; i++)
          tp->st[n + i] = tp->st[i];
      for (int k = 0; k < NLANE; k++)
@@ -870,7 +890,7 @@ index efd7b2e..da06f33 100644
              for (int i = 0; i < n; i++)
                  pats.lane[k].val[n + i] = pats.lane[k].val[i];
      tp->len = (uint8_t)(n * 2);
-@@ -3693,10 +3721,13 @@ static void input(void)
+@@ -3791,10 +3819,13 @@ static void input(void)
                      ui.chord_held = ui.held;
                      ui.chord_bar = ui.bar;
                      ui.chord_pat = (uint8_t)cur_pat(sel_trk());
@@ -885,7 +905,7 @@ index efd7b2e..da06f33 100644
                  ui.held_used = 1;
                  ui.touched = -1;
                  ui.btn_used |= m;
-@@ -4552,9 +4583,12 @@ void ui_frame(void)
+@@ -4652,9 +4683,12 @@ void ui_frame(void)
  {
      input();
      bt_poll();
@@ -916,7 +936,7 @@ index 7071e94..507b1ac 100644
  ch. deg	chord degree
 +rand	random
 diff --git a/docs/MANUAL.md b/docs/MANUAL.md
-index 72b9d77..e528dc1 100644
+index 86f6308..44eb5e4 100644
 --- a/docs/MANUAL.md
 +++ b/docs/MANUAL.md
 @@ -100,7 +100,7 @@ and turn **KNOB 4** (the pump) while it plays. Hold any button for a second and
@@ -928,7 +948,7 @@ index 72b9d77..e528dc1 100644
  - **Conductor**: the aux track that moves the other tracks through a key and scale, either from its own chords
    or from a track's notes.
  - **Throw**: a momentary effect on the drums or the melodic tracks, played from a key on FX's Throws page.
-@@ -980,7 +980,7 @@ tape has no wow.
+@@ -999,7 +999,7 @@ tape has no wow.
  
  ## Players
  
@@ -937,7 +957,7 @@ index 72b9d77..e528dc1 100644
  
  <img src="img/screen-players.png" width="240" alt="Players: the arp at 1/16, up, one octave, with C4 E4 G4 held" title="The arp">
  
-@@ -994,6 +994,25 @@ Press **ARP**. **KNOB 1** picks the player: off, arp, strum or hold.
+@@ -1013,6 +1013,29 @@ Press **ARP**. **KNOB 1** picks the player: off, arp, strum or hold.
    A key outside the scale plays the chord exactly as you held it, moved to that key. Roll strums the chord, up to
    one note per step.
  - **hold** keeps the notes you play until you play the next ones.
@@ -959,11 +979,15 @@ index 72b9d77..e528dc1 100644
 +    through the pattern before it repeats, and 32 steps and a length of 16 play the same phrase twice in one pass.
 +  - **vel %** is the chance a step's velocity changes, to anything from half to one and a half times its own.
 +  - **gate %** is the chance a step's note length changes, to anything from a tenth to twice its own.
-+  - **octave** is the octave span: each note lands in one of 1 to 4 octaves, counting up from the step's own.
++  - **octave** is how far a note may stray from the step's own octave: how many octaves below and above it, up to
++    three each way. In the middle it reads **0** and every note stays in the step's octave. Turn it right to allow
++    octaves above (**0/+1** to **0/+3**), left to allow octaves below (**-1/0** to **-3/0**); further out it widens
++    the other side too, and **-1/+1** spreads over three octaves around the step's. A step's own octave is its note's
++    (hold **SEQ** and press **OCT-** or **OCT+** to move a pattern's notes), and C4 for a step with no note set.
  
  The arp and the strum play the track's steps too. A step's notes are arpeggiated for as long as the step lasts
  (give it a longer **LENGTH** for more notes), together with any keys you hold. A step with a chord is strummed in
-@@ -1421,7 +1440,7 @@ On a sound page, hold **SAVE** and press white key 1 to 16 to keep the track's s
+@@ -1443,7 +1466,7 @@ On a sound page, hold **SAVE** and press white key 1 to 16 to keep the track's s
  | FX, SELECT four times | Throws | latch | | | | low: drum throws, high: melodic throws |
  | LFO | LFO | type | the type's three | | | play |
  | LFO, SELECT | LFO 2 | the type's fourth and fifth | | | | play |
@@ -973,10 +997,10 @@ index 72b9d77..e528dc1 100644
  | ARP, SELECT (last) | Weave | with | pattern | rule | plays | black: the track woven in, white: its pattern; SEL: KEEP AS PATTERN |
  | GLO | Mix | FX I | FX II | pan | level | black: tap to mute, hold to solo (several together) |
 diff --git a/tests/host/seq_test.c b/tests/host/seq_test.c
-index dc51b73..1fc1c8f 100644
+index b55cc75..aa15fdf 100644
 --- a/tests/host/seq_test.c
 +++ b/tests/host/seq_test.c
-@@ -1664,6 +1664,137 @@ static void t_step_players(void)      /* the arp and the strum play the steps' n
+@@ -1664,6 +1664,168 @@ static void t_step_players(void)      /* the arp and the strum play the steps' n
      printf("ok %s\n", cur);
  }
  
@@ -987,7 +1011,7 @@ index dc51b73..1fc1c8f 100644
 +    par[0][TP_PLAYER] = PL_RAND;
 +    par[0][TP_P1] = 127;                          /* every step sounds */
 +    par[0][TP_P2] = par[0][TP_P3] = 0;            /* the phrase locked */
-+    par[0][TP_P4] = 1;
++    par[0][TP_P4] = RAND_OCT_CENTRE;              /* the step's own octave */
 +    par[0][TP_AP2] = 8;
 +    P.pat[0][0].len = 8;
 +    lane_pool_set(P.lane, 0, 0, 1u << 0);         /* C only */
@@ -1000,6 +1024,7 @@ index dc51b73..1fc1c8f 100644
 +    /* active slots: only the steps set play (a step's note only marks it on) */
 +    reset();
 +    par[0][TP_PLAYER] = PL_RAND;
++    par[0][TP_P4] = RAND_OCT_CENTRE;
 +    par[0][TP_P1] = 127;
 +    par[0][TP_AP2] = 8;
 +    P.pat[0][0].len = 8;
@@ -1015,6 +1040,7 @@ index dc51b73..1fc1c8f 100644
 +    /* the phrase is the same in the next cycle: pitch and rhythm locked */
 +    reset();
 +    par[0][TP_PLAYER] = PL_RAND;
++    par[0][TP_P4] = RAND_OCT_CENTRE;
 +    par[0][TP_P1] = 127;
 +    par[0][TP_AP2] = 8;
 +    P.pat[0][0].len = 8;
@@ -1030,6 +1056,7 @@ index dc51b73..1fc1c8f 100644
 +    /* pitch 100 %: the next cycle's pitches move on */
 +    reset();
 +    par[0][TP_PLAYER] = PL_RAND;
++    par[0][TP_P4] = RAND_OCT_CENTRE;
 +    par[0][TP_P1] = 127;
 +    par[0][TP_P2] = 127;
 +    par[0][TP_AP2] = 8;
@@ -1045,9 +1072,10 @@ index dc51b73..1fc1c8f 100644
 +        CHECK(moved);
 +    }
 +    stop();
-+    /* note % 0: silence; octave span 2: two registers only */
++    /* note % 0: silence; octave range +1: two registers only */
 +    reset();
 +    par[0][TP_PLAYER] = PL_RAND;
++    par[0][TP_P4] = RAND_OCT_CENTRE;
 +    par[0][TP_P1] = 0;
 +    start();
 +    run(7 * L16 + 100);
@@ -1056,7 +1084,7 @@ index dc51b73..1fc1c8f 100644
 +    reset();
 +    par[0][TP_PLAYER] = PL_RAND;
 +    par[0][TP_P1] = 127;
-+    par[0][TP_P4] = 2;
++    par[0][TP_P4] = RAND_OCT_CENTRE + 1;          /* 0/+1: two registers */
 +    lane_pool_set(P.lane, 0, 0, 1u << 0);
 +    start();
 +    run(15 * L16 + 100);
@@ -1064,9 +1092,34 @@ index dc51b73..1fc1c8f 100644
 +    for (int i = 0; i < count(E_ON, 0); i++)
 +        CHECK(on_n(i)->a == 60 || on_n(i)->a == 72);
 +    stop();
++    /* octave range, by the knob's value: the centre keeps the step's own; -1/+1 (16) is three registers, both outer ones
++     * heard; -1/0 (11) only below; 0/+3 (15) up to three above */
++    for (int r = 0; r < 4; r++) {
++        static const uint8_t V[4] = {12, 16, 11, 15};
++        static const int LO[4] = {60, 48, 48, 60}, HI[4] = {60, 72, 60, 96};
++        int seen_lo = 0, seen_hi = 0;
++        reset();
++        par[0][TP_PLAYER] = PL_RAND;
++        par[0][TP_P1] = 127;
++        par[0][TP_P4] = V[r];
++        par[0][TP_AP2] = 16;                      /* a 16-step phrase: each step draws its own octave */
++        lane_pool_set(P.lane, 0, 0, 1u << 0);
++        start();
++        run(15 * L16 + 100);
++        CHECK(count(E_ON, 0) == 16);
++        for (int i = 0; i < count(E_ON, 0); i++) {
++            CHECK(on_n(i)->a >= LO[r] && on_n(i)->a <= HI[r] && on_n(i)->a % 12 == 0);
++            seen_lo |= on_n(i)->a == LO[r];
++            seen_hi |= on_n(i)->a == HI[r];
++        }
++        CHECK(seen_lo || r == 3);                 /* (0/+3: four registers, 16 draws: not every one need sound) */
++        CHECK(seen_hi || r == 3);
++        stop();
++    }
 +    /* velocity and gate: scaled when their knobs ask, within their bands */
 +    reset();
 +    par[0][TP_PLAYER] = PL_RAND;
++    par[0][TP_P4] = RAND_OCT_CENTRE;
 +    par[0][TP_P1] = 127;
 +    par[0][TP_AP2] = 16;
 +    par[0][TP_AP3] = 127;
@@ -1087,6 +1140,7 @@ index dc51b73..1fc1c8f 100644
 +    /* a pulse over a random step repeats that note (it does not draw another) */
 +    reset();
 +    par[0][TP_PLAYER] = PL_RAND;
++    par[0][TP_P4] = RAND_OCT_CENTRE;
 +    par[0][TP_P1] = 127;
 +    lane_pool_set(P.lane, 0, 0, 0x0FFFu);
 +    st(0, 0)->comp = SC_PULSE;
@@ -1098,6 +1152,7 @@ index dc51b73..1fc1c8f 100644
 +    /* the conductor still moves the generated pitches */
 +    reset();
 +    par[0][TP_PLAYER] = PL_RAND;
++    par[0][TP_P4] = RAND_OCT_CENTRE;
 +    par[0][TP_P1] = 127;
 +    par[0][TP_BRAIN] = BM_DIATONIC;
 +    S.brain_key = 0;
@@ -1114,7 +1169,7 @@ index dc51b73..1fc1c8f 100644
  static void t_hold_player(void)
  {
      cur = "hold-player";
-@@ -2984,6 +3115,7 @@ int main(void)
+@@ -3208,6 +3370,7 @@ int main(void)
      t_player_switch();
      t_step_players();
      t_hold_player();
@@ -1123,10 +1178,10 @@ index dc51b73..1fc1c8f 100644
      t_duck();
      t_loops();
 diff --git a/tests/host/synth_test.c b/tests/host/synth_test.c
-index 7c8daad..77963e6 100644
+index d66436c..a467994 100644
 --- a/tests/host/synth_test.c
 +++ b/tests/host/synth_test.c
-@@ -1426,6 +1426,13 @@ int main(void)
+@@ -1434,6 +1434,24 @@ int main(void)
          check("arp pattern 2 is bounce", !strcmp(num, "bounce"));
          tp_text_par(TP_P2, 3, p, num, unit);
          check("arp pattern 3 is bounce+", !strcmp(num, "bounce+"));
@@ -1134,7 +1189,18 @@ index 7c8daad..77963e6 100644
 +        check("the random knobs follow the player",
 +              !strcmp(tp_info_par(TP_P1, p)->name, "note %") && !strcmp(tp_info_par(TP_AP2, p)->name, "length") &&
 +                  !strcmp(tp_info_par(TP_P4, p)->name, "octave"));
-+        check("the random octave spans 1..4", tp_info_par(TP_P4, p)->lo == 1 && tp_info_par(TP_P4, p)->hi == 4);
++        check("the random octave range: 25 values about a centre of 0",
++              tp_info_par(TP_P4, p)->lo == 0 && tp_info_par(TP_P4, p)->hi == 24 && tp_info_par(TP_P4, p)->def == 12);
++        {
++            static const struct { int v; const char *s; int lo, hi; } OC[] = {
++                {12, "0", 0, 0}, {13, "0/+1", 0, 1}, {15, "0/+3", 0, 3}, {16, "-1/+1", 1, 1}, {24, "-3/+3", 3, 3},
++                {11, "-1/0", 1, 0}, {9, "-3/0", 3, 0}, {8, "-1/+1", 1, 1}, {0, "-3/+3", 3, 3}};
++            for (unsigned i = 0; i < sizeof OC / sizeof OC[0]; i++) {
++                tp_text_par(TP_P4, OC[i].v, p, num, unit);
++                check("the random octave knob's path", !strcmp(num, OC[i].s) && rand_oct_lo(OC[i].v) == OC[i].lo &&
++                                                          rand_oct_hi(OC[i].v) == OC[i].hi);
++            }
++        }
 +        tp_text_par(TP_P2, 127, p, num, unit);
 +        check("random 127 is 100 %", !strcmp(num, "100") && !strcmp(unit, "%"));
          tp_text_par(TP_LTYPE, LT_WAVE, p, num, unit);
@@ -1142,10 +1208,10 @@ index 7c8daad..77963e6 100644
          tp_text_par(TP_LTYPE, LT_WOBBLE, p, num, unit);
 diff --git a/tests/scenarios/random.xy b/tests/scenarios/random.xy
 new file mode 100644
-index 0000000..ebd9139
+index 0000000..ea08ae4
 --- /dev/null
 +++ b/tests/scenarios/random.xy
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,65 @@
 +# random: eight knobs, a per-pattern note pool picked on the piano, in-scale dots; steps as active slots; no format bump
 +wait 300
 +turn ALGO 1
@@ -1160,6 +1226,10 @@ index 0000000..ebd9139
 +shot random_players2.png
 +turn SELECT 1
 +expect page Players_3
++# the octave knob at 0/+2: the step's own octave and up to two above (the knob's value 14: right of the centre, 12)
++knob 2 p4 14
++expect par2.p4 14
++wait 40
 +shot random_players3.png
 +# the pool picker: hold a step, SEQ; the keys toggle C and E
 +tap SEQ
@@ -1179,6 +1249,21 @@ index 0000000..ebd9139
 +key w0 up
 +shot random_pool_dots.png
 +tap SEQ
++# harmony: the dots shrink to the conductor's chord (D minor: D F A), held on its keys
++knob 2 brain harmony
++play 9 62 on
++play 9 65 on
++play 9 69 on
++tap SEQ
++key w0 down
++tap SEQ
++key w0 up
++shot random_pool_chord.png
++tap SEQ
++play 9 62 off
++play 9 65 off
++play 9 69 off
++knob 2 brain diatonic
 +# steps as active slots: tap two on (with none set, every step plays)
 +tapkey w0
 +tapkey w2

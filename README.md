@@ -146,7 +146,7 @@ Flash (`--info` prints the connected FM-1's identity and writes nothing):
 (browser emulator), `--demo` (mirroring for demos), `--release X.Y`, `--no-ble`. v0.9's `fm1.toml`
 (unchanged in v0.9.3) turns Bluetooth MIDI, Bluetooth audio and the USB MIDI host on in the default
 build (`--no-ble` builds `loom-usb.fwsc` without the radio); v0.9's image was 524260 B, with 93520 B
-of RAM used and the pool 335460 B of 344064 (v0.9.3 has no device build in this tree yet).
+of RAM used and the pool 335460 B of 344064 (v0.11 builds here: image 544804 B, RAM 95104 B of 98304, pool 335700 B of 344064).
 
 ### AMB-1 (fm1-amb)
 
@@ -503,10 +503,10 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 
 | repo | commit | role |
 |---|---|---|
-| `charlesvestal/fm1-loom` | `92b4bf2` (v0.9.3) | LOOM-8 |
+| `charlesvestal/fm1-loom` | `c19e076` (v0.11) | LOOM-8 |
 | `charlesvestal/fm1-amb` | `188b0a42` (v1.3) | AMB-1 |
 | `styvesgoupil/frasil` | `422cac6` (v2.0.1) | FRASIL |
-| `charlesvestal/fm1-base` | `d0133c2` (own-bt) | the platform layer (all three fm1-base firmwares' `base`) |
+| `charlesvestal/fm1-base` | `d8ff8f4` (main) | the platform layer (all three fm1-base firmwares' `base`) |
 | `hugelton/felucca-bsp` | `305c372` (own-bt) | the chip layer (`fm1-base/bsp`) |
 | `hugelton/Felucca` | `63f88ec` | Felucca (main, 5 commits past v1.6.1) |
 | `hugelton/Felucca-Engines` | `c46e008` | Felucca's `firmware/engines` submodule |
@@ -525,17 +525,16 @@ All pins live in [`revisions.env`](revisions.env), which the scripts source.
 
 The repos are pinned to their latest `main` (LOOM-8, AMB-1, FRASIL, ZEN-1, Melodee and Mutable
 Dreams are at their latest release tag; TONITOR, SLOOP, Dinghy and CS-1 have none, so their pins are
-their latest main commits). The exceptions are LOOM-8's platform pins: fm1-loom v0.9.x moves to
-Optimist's own Bluetooth stack, and its base submodule names fm1-base's `own-bt` branch (`d0133c2`,
-15 commits past `main`) whose bsp submodule names felucca-bsp's `own-bt` branch (`305c372`, 6 commits
-past `main`). Those two branches merge `main` and carry the radio drivers and `bt/` sources v0.9.x
-needs, so they are pinned instead of `main`. ZEN-1's two `fm1-fomni` rows are not
+their latest main commits). The one exception is felucca-bsp: fm1-base main (which merged its
+`own-bt` branch, the own Bluetooth stack) names felucca-bsp's `own-bt` branch (`305c372`, 6 commits
+past `main`), which carries the radio drivers that stack needs, so it is pinned instead of `main`.
+ZEN-1's two `fm1-fomni` rows are not
 clones: `setup.sh` fetches them by SHA into `clones/zen-1` for its platform guard, because they are
 not on any branch of that repository. Mutable Dreams' pin is two things: the v1.1 commit that
 publishes the release (and its checksums), and the SHA-256 of the source archive that commit
 carries (the repository has no source tree of its own).
 One fm1-base and one felucca-bsp are shared by all three fm1-base firmwares. AMB-1 v1.3's submodule
-names fm1-base `934e40d` (an ancestor of the pinned `own-bt` tip); LOOM-8 v0.9.3 names `d0133c2`, the
+names fm1-base `934e40d` (an ancestor of the pin); LOOM-8 v0.11 names `d8ff8f4`, the
 pin itself; FRASIL names styvesgoupil/fm1-base's `frasil` branch (`5da1f3d`), an older fm1-base plus
 the two backup commits `patches/fm1-base/10-backup-restore` adds. Felucca-Engines is pinned to the
 commit Felucca's own tree names, not to engines `main`: engines `main` adds the PHASE engine and an

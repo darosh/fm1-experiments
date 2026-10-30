@@ -1,18 +1,18 @@
-From abcca9078e93508ed9d3a45f7ead70ecb26c8ead Mon Sep 17 00:00:00 2001
+From e942b1dbe3d19a597c44d8e4499e178e2634f43d Mon Sep 17 00:00:00 2001
 From: Jan Forst <ensonador@gmail.com>
-Date: Tue, 27 Oct 2026 23:41:32 +0100
-Subject: [PATCH] LOOM-8: harmony. A track can follow the conductor's chord,
- not just its scale: the conductor now keeps the chord its keys, its steps or
- a FOLLOW track play (up to four notes, packed in one word the interrupt reads
- whole), and the new follow modes "harmony" (each note snaps to the nearest
- chord tone, register kept, ties down) and "chord deg" (the note's place in
- the scale picks the chord tone, kept in its octave) take their pitches from
- it. A single-note source is its diatonic triad; a scene re-derives the triad
- from its degree; no chord falls back to diatonic. Fills keep their chord
- tones. Five follow modes in the SEL lists and the routing page (a bar marks
- the harmony modes), the active chord shown on the conductor's Engine page. No
- format change: the two modes are appended values of TP_BRAIN. harmony.xy;
- t_harmony; the manual
+Date: Fri, 30 Oct 2026 09:47:21 +0100
+Subject: [PATCH 1/2] LOOM-8: harmony. A track can follow the conductor's
+ chord, not just its scale: the conductor now keeps the chord its keys, its
+ steps or a FOLLOW track play (up to four notes, packed in one word the
+ interrupt reads whole), and the new follow modes "harmony" (each note snaps
+ to the nearest chord tone, register kept, ties down) and "chord deg" (the
+ note's place in the scale picks the chord tone, kept in its octave) take
+ their pitches from it. A single-note source is its diatonic triad; a scene
+ re-derives the triad from its degree; no chord falls back to diatonic. Fills
+ keep their chord tones. Five follow modes in the SEL lists and the routing
+ page (a bar marks the harmony modes), the active chord shown on the
+ conductor's Engine page. No format change: the two modes are appended values
+ of TP_BRAIN. harmony.xy; t_harmony; the manual
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>
 ---
@@ -35,7 +35,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>
  create mode 100644 tests/scenarios/harmony.xy
 
 diff --git a/app/dsp/synth.c b/app/dsp/synth.c
-index 089b519..6bc4874 100644
+index 8341e59..483a232 100644
 --- a/app/dsp/synth.c
 +++ b/app/dsp/synth.c
 @@ -91,7 +91,7 @@ static const char *const ARPSTY_N[6] = {"off", "pedal", "thirds", "double", "ski
@@ -47,7 +47,7 @@ index 089b519..6bc4874 100644
  static const char *const BEND_N[9] = {"off", "1", "2", "3", "4", "5", "6", "7", "octave"};
  static const char *const WTNAME_N[WT_NTABLE] = {"shapes", "nasal", "grit", "vocal", "spiral", "fold", "octaves",
                                                  "glass", "chirp"};
-@@ -3014,7 +3014,7 @@ static const tp_info_t FIXED[NTP_SOUND + 13] = {
+@@ -3039,7 +3039,7 @@ static const tp_info_t FIXED[NTP_SOUND + 13] = {
      {"hold", 0, 1, 0, PK_SWITCH, 0},                    {"length", 0, 2, 1, PK_NAMES, ARPLEN_N},
      {"style", 0, 5, 0, PK_NAMES, ARPSTY_N},             {"glide", 0, 2, 0, PK_NAMES, ARPGLD_N},
      {"stereo", 0, 2, 0, PK_NAMES, ARPSTE_N},            {"level", 0, 127, 100, PK_FADER, 0},
@@ -57,7 +57,7 @@ index 089b519..6bc4874 100644
  /* a drumline key's values (synth.h DP_*); its model's knobs take their names and defaults from drumline.c
   * (tp_info_par). The key's envelope and filter: its Envelope and Filter pages */
 diff --git a/app/dsp/synth.h b/app/dsp/synth.h
-index f16c185..37e0427 100644
+index d7622e2..fad00c7 100644
 --- a/app/dsp/synth.h
 +++ b/app/dsp/synth.h
 @@ -83,7 +83,8 @@ enum {
@@ -82,10 +82,10 @@ index f16c185..37e0427 100644
  #define DPX_N 4                                      /* knobs 5..8 of a key's model */
  #define TP_DRUMX(s, j) (TP_DRUMX0 + (s) * DPX_N + (j))
 diff --git a/app/pages.c b/app/pages.c
-index 22e7ee1..1323427 100644
+index 9878bdf..23bb6b5 100644
 --- a/app/pages.c
 +++ b/app/pages.c
-@@ -153,7 +153,7 @@ static const char *const CLOCK_ROW[SEQ_NCLK] = {"internal", "sends", "receives"}
+@@ -162,7 +162,7 @@ static const char *const CLOCK_ROW[SEQ_NCLK] = {"internal", "sends", "receives"}
  static const char *const METRO_NAME[3] = {"off", "rec", "on"};
  static const char *const ONOFF[2] = {"off", "on"};
  static const char *const LINK_NAME[9] = {"off", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8"};
@@ -94,7 +94,7 @@ index 22e7ee1..1323427 100644
  static const char *const CORE2_NAME[4] = {"one core", "two cores", "lost", "barred"};
  static const char *const USBA_NAME[2] = {"follows knob", "full"};
  static const char *const BRAIN_KNOB[3] = {"key", "scale", "link"};
-@@ -2328,7 +2328,7 @@ static void list_sound(int trk)
+@@ -2506,7 +2506,7 @@ static void list_sound(int trk)
          list_head("follow");
          for (int t = 0; t < NTRK; t++) {
              s_cat(num_s((uint32_t)t + 1u, s_cat(nm[t], "T")), " FOLLOWS");
@@ -103,7 +103,7 @@ index 22e7ee1..1323427 100644
          }
      } else if (is_fx(trk)) {
          list_add(ACTION_NAME[A_EFFECT], fx_label(ui.pick_fx % NFXPICK), LK_PICK, A_EFFECT);
-@@ -2372,7 +2372,7 @@ static void list_sound(int trk)
+@@ -2550,7 +2550,7 @@ static void list_sound(int trk)
              num_s((uint32_t)sc + 1u, s_cat(from_t, "from T"));
              list_add(ACTION_NAME[A_PASTE_SOUND], from_t, LK_ACTION, A_PASTE_SOUND);
          }
@@ -112,7 +112,7 @@ index 22e7ee1..1323427 100644
          list_add(ACTION_NAME[A_FOLLOW], fol_t, LK_PICK, A_FOLLOW);
          if (is_midi(trk)) {                          /* its knobs' CCs (its notes always go out: no MIDI OUT) */
              list_head("MIDI");
-@@ -3741,8 +3741,10 @@ static void draw_brain(void)
+@@ -3921,8 +3921,10 @@ static void draw_brain(void)
  {
      const uint8_t *p = proj.trk[AUX_BRAIN].par;
      int key = seq.brain_key % 12, sc = seq.brain_scale % NBS, deg = (int8_t)seq.brain_deg, src = p[TP_E1] % 9u;
@@ -125,7 +125,7 @@ index 22e7ee1..1323427 100644
      char t[48], *e;
      for (int i = 0; i < NTRK; i++)
          h = hash_u(h, proj.trk[i].par[TP_BRAIN] | (uint32_t)is_drum(i) << 4);
-@@ -3764,7 +3766,7 @@ static void draw_brain(void)
+@@ -3944,7 +3946,7 @@ static void draw_brain(void)
              s_cat(s_cat(t, TRACK_NAME[src - 1]), " is a kit: it has no notes");
              cv_text(12, 40, &FONT_XS, t, K_REC);
          } else {
@@ -134,7 +134,7 @@ index 22e7ee1..1323427 100644
              cv_text(12, 34, &FONT_XS, t, K_DIM);
              cv_text(12, 48, &FONT_XS, "chords, a bass line; it follows nothing", K_DIM);
          }
-@@ -3774,26 +3776,42 @@ static void draw_brain(void)
+@@ -3954,26 +3956,42 @@ static void draw_brain(void)
              e = s_cat(e, "+");
          num_i(deg, e);
          cv_text(12, 44, &FONT_B, t, deg ? K_NOW : K_DIM);
@@ -182,7 +182,7 @@ index 22e7ee1..1323427 100644
      cv_blit(0, MAIN_Y);
  }
 diff --git a/app/seq/seq.c b/app/seq/seq.c
-index eedae27..cb31c6c 100644
+index 838d389..ec9ede4 100644
 --- a/app/seq/seq.c
 +++ b/app/seq/seq.c
 @@ -503,12 +503,120 @@ static int brain_src(const seq_t *s) { return s->brain_src >= 1 && s->brain_src
@@ -351,7 +351,7 @@ index eedae27..cb31c6c 100644
      for (t = 0; t < 4; t++)
          s->brain_seen[t] = e[t];
      for (t = 0; t < NTRK; t++)
-@@ -815,8 +954,8 @@ static void fire_notes(seq_t *s, int t, const step_t *st, int p, uint32_t L, int
+@@ -788,8 +927,8 @@ static void fire_notes(seq_t *s, int t, const step_t *st, int p, uint32_t L, int
              emit_note(s, t, note, vel, glide, tag, len_q8, o);
          tr->last_note[n++] = (uint8_t)note;
      }
@@ -362,7 +362,7 @@ index eedae27..cb31c6c 100644
      pl = s->par[t][TP_PLAYER];
      if (n && pl == PL_ARP)
          step_arp(s, t, tr->last_note, n, vel, len_q8);
-@@ -849,10 +988,9 @@ static void fire_aux(seq_t *s, int t, const step_t *st, int p, uint32_t L, const
+@@ -822,10 +961,9 @@ static void fire_aux(seq_t *s, int t, const step_t *st, int p, uint32_t L, const
      uint32_t len_q8 = st->len ? len_of(L, st->len) : L / 100u * (tp->nlen > 100 ? 100u : tp->nlen);
      int i;
      (void)p;
@@ -376,7 +376,7 @@ index eedae27..cb31c6c 100644
          return;
      }
      for (i = 0; i < SN; i++) {
-@@ -1132,6 +1270,7 @@ static void scene_read(seq_t *s, int k, uint8_t *next)
+@@ -1103,6 +1241,7 @@ static void scene_read(seq_t *s, int k, uint8_t *next)
      s->brain_key = (uint8_t)(sc->brain_key % 12);
      s->brain_scale = sc->brain_scale < NBS ? sc->brain_scale : BS_MAJOR;
      s->brain_deg = sc->brain_deg;
@@ -384,9 +384,9 @@ index eedae27..cb31c6c 100644
      s->wv_ppat = (uint8_t)(sc->weave % NPATT);
      s->scene = (uint8_t)k;
  }
-@@ -1465,8 +1604,8 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
+@@ -1667,8 +1806,8 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
      if (retrig && trig_ok)
-         happens = cond_plays(s, t, st);
+         happens = cond_plays(s, t, st->cond);
      plays = happens && !(s->mute >> t & 1u) && !punch_muted(s, t) && !tr->fill_on && !step_empty(st);
 -    if (happens && !plays && !drum && t == brain_src(s) && low_note(st->note, SN))
 -        brain_set_near(s, low_note(st->note, SN));   /* (a FOLLOW track muted still sets the chords) */
@@ -395,7 +395,7 @@ index eedae27..cb31c6c 100644
      if (happens && !rep && tr->act[SC_JUMP])
          jump_set(s, t, tr->act[SC_JUMP] - 1, p);
      kind = tr->act[SC_PULSE] ? SC_PULSE : tr->act[SC_HOLD] ? SC_HOLD : 0;
-@@ -1666,7 +1805,9 @@ static void fire_fills(seq_t *s, const seq_sink_t *o)
+@@ -1880,7 +2019,9 @@ static void fire_fills(seq_t *s, const seq_sink_t *o)
              note = tr->fill_notes[(r >> 2) % tr->nfill];
              vel = 70 + (int)(r >> 10) % 41;
          }
@@ -406,7 +406,7 @@ index eedae27..cb31c6c 100644
          if (fx_on(s, t, PX_OCTAVE))
              note -= 12;
          note = clamp_note(note);
-@@ -2121,16 +2262,6 @@ static void players_follow_par(seq_t *s, const seq_sink_t *o)
+@@ -2335,16 +2476,6 @@ static void players_follow_par(seq_t *s, const seq_sink_t *o)
      }
  }
  
@@ -423,7 +423,7 @@ index eedae27..cb31c6c 100644
  static void phys_set(uint32_t *phys, uint8_t *nphys, int note, int on)
  {
      uint32_t b = 1u << (note & 31);
-@@ -2409,8 +2540,12 @@ static void key_in(seq_t *s, int t, int note, int on, int vel, int raw, const se
+@@ -2625,8 +2756,12 @@ static void key_in(seq_t *s, int t, int note, int on, int vel, int raw, const se
              player_note_off(s, t, shifted, TAG_KEY | (uint32_t)note, o);
          break;
      }
@@ -438,7 +438,7 @@ index eedae27..cb31c6c 100644
  }
  
  static void keys_all_off(seq_t *s, int t, const seq_sink_t *o)
-@@ -2438,10 +2573,10 @@ static void keys_all_off(seq_t *s, int t, const seq_sink_t *o)
+@@ -2654,10 +2789,10 @@ static void keys_all_off(seq_t *s, int t, const seq_sink_t *o)
      pl->sroll_to_next = NEVER;
  }
  
@@ -451,7 +451,7 @@ index eedae27..cb31c6c 100644
      if (note < 1 || note > 127)
          return;
      phys_set(s->brain_phys, 0, note, on);
-@@ -2452,13 +2587,10 @@ static void brain_key_in(seq_t *s, int note, int on, const seq_sink_t *o)
+@@ -2668,13 +2803,10 @@ static void brain_key_in(seq_t *s, int note, int on, const seq_sink_t *o)
              rec_key_off(s, AUX_BRAIN, note);
      }
      if (on) {
@@ -470,10 +470,10 @@ index eedae27..cb31c6c 100644
      if (s->brain_link >= 1 && s->brain_link <= NTRK)
          key_in(s, s->brain_link - 1, note, on, 100, 1, o);
 diff --git a/app/seq/seq.h b/app/seq/seq.h
-index dca72f6..3a8869e 100644
+index fa38614..2e06a4f 100644
 --- a/app/seq/seq.h
 +++ b/app/seq/seq.h
-@@ -236,6 +236,8 @@ typedef struct {
+@@ -246,6 +246,8 @@ typedef struct {
      volatile uint8_t brain_link;      /* 0 off, 1..8 = instrument track t + 1 played from the brain's keys too */
      volatile uint16_t brain_route;    /* bit t = track t follows */
      uint32_t brain_phys[4];           /* the brain's keys down (bit note): the lowest is the chord's root */
@@ -483,7 +483,7 @@ index dca72f6..3a8869e 100644
      uint32_t punch_keys;              /* bits NPUNCH_FX: held keys (set from the key ring, in the interrupt) */
      uint8_t punch_tgt[NPUNCH_FX];     /* each held key's target: 0xFF = its octave's group, else one track */
 diff --git a/app/ui.c b/app/ui.c
-index ae501ab..efd7b2e 100644
+index 19ba274..c961def 100644
 --- a/app/ui.c
 +++ b/app/ui.c
 @@ -132,7 +132,7 @@ static void apply_brain(void)
@@ -495,7 +495,7 @@ index ae501ab..efd7b2e 100644
              route |= (uint16_t)(1u << t);
      seq.brain_route = route;
      pats.scene[cur_scene()].brain_key = seq.brain_key;
-@@ -2475,7 +2475,7 @@ static void list_change_do(int32_t e)
+@@ -2572,7 +2572,7 @@ static void list_change_do(int32_t e)
          }
          case A_FOLLOW: {
              int t = list_follow_trk();
@@ -530,7 +530,7 @@ index 2036d29..7071e94 100644
 +chord deg	chord degree
 +ch. deg	chord degree
 diff --git a/docs/MANUAL.md b/docs/MANUAL.md
-index 30e7f07..72b9d77 100644
+index fb678cd..86f6308 100644
 --- a/docs/MANUAL.md
 +++ b/docs/MANUAL.md
 @@ -60,9 +60,11 @@ black keys 1 to 11.
@@ -547,8 +547,8 @@ index 30e7f07..72b9d77 100644
  6. **Throws.** Press **FX** and turn **SELECT** to its last page, Throws. Hold a low key: F3 mutes the
     drums, G3 stutters them, A3 repeats, B3 echoes, C4 builds, D4 plays four on the floor and E4 jumbles them. A
     high key does the same to the melodic tracks. Let go and the pattern comes back.
-@@ -168,7 +170,8 @@ press…" means keep **HOME** down while you press the next thing.
- | solo a track | On Mix, hold its black key (hold several to solo them together). Let go and the mutes come back. <!-- hint: black 1 --> |
+@@ -169,7 +171,8 @@ press…" means keep **HOME** down while you press the next thing.
+ | solo a track | On Mix, hold its black key (hold several to solo them together). Let go and the mutes come back. Tap it twice and the solo stays when you let go (also on other pages); tap any track's black key on Mix to end it. <!-- hint: black 1 --> |
  | sweep a few tracks together | Press **GLO** and turn **SELECT** to LFO, the shared LFO. The black keys pick the tracks, and **KNOB 4** picks what it moves. <!-- hint: press GLO; turn SELECT, KNOB 4; black 1,2,3 --> |
  | play a progression | Turn **ALGORITHM** to COND (the conductor). Press **EDIT** and play a chord: it moves the tracks that follow. Press **SEQ** and press a step to put the chord on it. Set the scale to 4 on the Bar page so that a step is a beat. <!-- hint: turn ALGORITHM; press EDIT; white 1,3,5 --> |
 -| let a track lead the chords | On COND, press **EDIT** and turn **SELECT** to Follow. Press the track's black key, and its lowest note sets the chord for the others (use a chord part or a bass line). Press the same key again to turn it off. <!-- hint: press EDIT; turn SELECT; black 3 --> |
@@ -557,7 +557,7 @@ index 30e7f07..72b9d77 100644
  | get new sounds for the band | Press **HOME**, press **SEL** and pick RANDOMIZE PRESETS: T2 to T8 each get a random preset for their part. Press **SEL** for yes. |
  | save | LOOM-8 saves by itself when it is stopped and quiet. **SAVE** saves at once. Hold **SAVE** and press white key 1 to 3 to save to that slot. <!-- hint: press SAVE --> |
  | keep a sound | On a sound page, hold **SAVE** and press a white key. The sound becomes that user preset. <!-- hint: hold SAVE; white 1 --> |
-@@ -320,7 +323,8 @@ done.
+@@ -331,7 +334,8 @@ again, it starts plain.
  | 14 | skip trigger: the step plays every Nth pass | a cycle of 1 to 9 |
  | 15 | flam: a soft grace hit, then the step's own a moment later | 1 to 9 32nds of a step apart |
  
@@ -567,7 +567,7 @@ index 30e7f07..72b9d77 100644
  but the last, then playing only the first. A new trick starts at its default: pulse and hold 4, multiply 2,
  velocity 64, the ramps and random 4, glide 40 %, bend down-up, tonality fifth up, jump forward, the skips a
  cycle of 2, and flam 4 32nds.
-@@ -497,7 +501,34 @@ delay. Press **SEL** for the list:
+@@ -516,7 +520,34 @@ delay. Press **SEL** for the list:
  - COPY SOUND, then PASTE SOUND on another track, puts the same sound there, as a preset would: the track keeps its
    own level, pan, player and MIDI OUT. A synth's sound pastes onto a synth track, a kit onto a kit track. Undo takes
    it back.
@@ -603,7 +603,7 @@ index 30e7f07..72b9d77 100644
  
  <img src="img/screen-engine.png" width="240" alt="The Engine page on T2: the engine, its picture, the preset name, and its four knobs from 00 to 99" title="The Engine page"> <img src="img/screen-play.png" width="240" alt="Play: voice mode, portamento, bend range and volume" title="The Play page">
  
-@@ -1038,16 +1069,20 @@ Turn **ALGORITHM** past T8. Each aux track has its own page under **EDIT** and i
+@@ -1057,16 +1088,20 @@ Turn **ALGORITHM** past T8. Each aux track has its own page under **EDIT** and i
  - **COND** (the conductor) has key, scale and link (an instrument track that also plays the conductor's keys).
    Play a chord on its keys and the tracks that follow move to it. Its steps hold the chords you played: press
    **SEQ** and a white key. Set the track scale to 4 so each step is a beat, or to 16 for a bar. Page 2 is the
@@ -633,7 +633,7 @@ index 30e7f07..72b9d77 100644
    weave on and another tap turns it off. Each track weaves as its ARP's Weave page sets it, and REC records the
    weaves onto the WEAVE steps. See Weave, above.
 diff --git a/tests/host/seq_test.c b/tests/host/seq_test.c
-index 86d0403..dc51b73 100644
+index 61a1d35..b55cc75 100644
 --- a/tests/host/seq_test.c
 +++ b/tests/host/seq_test.c
 @@ -1211,6 +1211,99 @@ static void t_follow(void)             /* the conductor's FOLLOW track: its lowe
@@ -736,7 +736,7 @@ index 86d0403..dc51b73 100644
  static void t_arp(void)
  {
      cur = "arp";
-@@ -2864,6 +2957,7 @@ int main(void)
+@@ -3082,6 +3175,7 @@ int main(void)
      t_pulse();
      t_pulse_kit();
      t_follow();
