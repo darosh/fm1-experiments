@@ -1,0 +1,1165 @@
+From 8ae2509c10b82770a4652893931363f00d184cc2 Mon Sep 17 00:00:00 2001
+From: Jan Forst <ensonador@gmail.com>
+Date: Fri, 30 Oct 2026 18:38:10 +0100
+Subject: [PATCH] LOOM-8: generators. A melodic track can have a generator per
+ pattern, EUCLID or TURING (ARP's last page, Generator): it plays a live copy
+ of the track's steps, shown on the grid and the white-key LEDs as it changes,
+ and leaves the stored pattern as it was until COMMIT GENERATOR (SEL list;
+ undoable) writes it in. A hit on a step with notes plays them with the
+ generated velocity, on an empty step the root (the pattern's first note, else
+ C4); the step's tricks and chance stay. EUCLID: length, hits, rotate. TURING:
+ a 2..16 bit shift register that starts from the pattern's steps, lock (0
+ random .. 127 the loop repeats exactly), density, velocity from the register.
+ It composes with the random player (rhythm from the generator, pitch from the
+ pool). The settings live in a pseudo-lane (LANE_GEN), no format change; the
+ shadow is 64 bytes a track in RAM. generator.xy (expect gen, expect genhits);
+ t_generators; the manual
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ app/host.c                   |  33 ++++++++
+ app/pages.c                  | 144 +++++++++++++++++++++++++++++------
+ app/seq/pattern.c            |  40 ++++++++++
+ app/seq/pattern.h            |  10 ++-
+ app/seq/seq.c                | 111 ++++++++++++++++++++++++++-
+ app/seq/seq.h                |  16 ++++
+ app/ui.c                     |  92 +++++++++++++++++++---
+ docs/MANUAL.md               |  37 ++++++++-
+ tests/host/seq_test.c        | 121 +++++++++++++++++++++++++++++
+ tests/scenarios/generator.xy |  77 +++++++++++++++++++
+ 10 files changed, 643 insertions(+), 38 deletions(-)
+ create mode 100644 tests/scenarios/generator.xy
+
+diff --git a/app/host.c b/app/host.c
+index a6ba5a5..0793de3 100644
+--- a/app/host.c
++++ b/app/host.c
+@@ -640,6 +640,39 @@ static int expect_more(const char *what, const char *a, const char *b, const cha
+             host_fails++;
+         } else
+             printf("  ok pool %s %s == 0x%03x\n", t, pt, got);
++    } else if (!strcmp(what, "gen")) {             /* expect gen T PAT MODE A B C: a pattern's generator (0 off, 1 euclid, 2 turing) */
++        char t[16], pt[16], v[4][16];
++        uint8_t g[4];
++        int want[4], n = sscanf(plat_host_line, "%*s %*s %15s %15s %15s %15s %15s %15s", t, pt, v[0], v[1], v[2], v[3]);
++        if (n < 3) {
++            printf("FAIL expect gen: T PAT MODE [A B C]\n");
++            host_fails++;
++            return 1;
++        }
++        lane_gen_get(pats.lane, atoi(t) - 1, atoi(pt) - 1, g);
++        for (int i = 0; i < 4; i++)
++            want[i] = i < n - 2 ? atoi(v[i]) : (int)g[i];
++        if (g[0] != want[0] || g[1] != want[1] || g[2] != want[2] || g[3] != want[3]) {
++            printf("FAIL expect gen %s %s: got %d %d %d %d, wanted %d %d %d %d\n", t, pt, g[0], g[1], g[2], g[3], want[0], want[1],
++                   want[2], want[3]);
++            host_fails++;
++        } else
++            printf("  ok gen %s %s == %d %d %d %d\n", t, pt, g[0], g[1], g[2], g[3]);
++    } else if (!strcmp(what, "genhits")) {         /* expect genhits T N: the hits of track T's live shadow, steps 1..64 */
++        char t[16], v[16];
++        int got = 0;
++        if (sscanf(plat_host_line, "%*s %*s %15s %15s", t, v) != 2) {
++            printf("FAIL expect genhits: T N\n");
++            host_fails++;
++            return 1;
++        }
++        for (int i = 0; i < NSTEP; i++)
++            got += seq_gen_vel(&seq, atoi(t) - 1, i) > 0;
++        if (got != atoi(v)) {
++            printf("FAIL expect genhits %s == %s, got %d\n", t, v, got);
++            host_fails++;
++        } else
++            printf("  ok genhits %s == %d\n", t, got);
+     } else if (!strcmp(what, "lane")) {            /* expect lane T PAT PARAM N: the steps a lock / motion lane holds */
+         char t[16] = {0}, pt[16] = {0}, pn[24] = {0}, nv[16] = {0};
+         int ln, got = 0;
+diff --git a/app/pages.c b/app/pages.c
+index a2a8e77..4f89d46 100644
+--- a/app/pages.c
++++ b/app/pages.c
+@@ -83,11 +83,11 @@ static uint16_t trk_tint(int t) { return ink_mix(trk_ink(t), theme->tint); }
+  * track: Engine, Play, Play 2 (the octave), then Sub where the engine has a second page of knobs (TP_X1..X4: knit's
+  * oscillator 2, level, sub, noise; rayon's fall); a kit or an FX track Engine and Play; the conductor Engine, Play (routing), Sub (Follow) */
+ enum { P_ARRANGE, P_SONG, P_STEPS, P_BAR, P_ENGINE, P_PLAY, P_PLAY2, P_SUB, P_ENV, P_FILTER, P_ENV2, P_KITF, P_CHARACTER, P_SENDS,
+-       P_FX1, P_FX2, P_THROWS, P_LFO, P_LFO2, P_PLAYERS, P_PLAYERS2, P_PLAYERS3, P_WEAVE, P_MIX, P_MASTER, P_MASTER2, P_MASTER3, P_GLFO, P_SETUP,
++       P_FX1, P_FX2, P_THROWS, P_LFO, P_LFO2, P_PLAYERS, P_PLAYERS2, P_PLAYERS3, P_WEAVE, P_GEN, P_MIX, P_MASTER, P_MASTER2, P_MASTER3, P_GLFO, P_SETUP,
+        P_STATUS, NPAGES };
+ static const char *const PAGE_NAME[NPAGES] = {"Arrange", "Song", "Steps", "Bar", "Engine", "Play", "Play 2", "Sub", "Envelope",
+                                               "Filter", "Filter env", "Kit filter", "Character", "Sends", "FX I",
+-                                              "FX II", "Throws", "LFO", "LFO 2", "Players", "Players 2", "Hold", "Weave", "Mix",
++                                              "FX II", "Throws", "LFO", "LFO 2", "Players", "Players 2", "Hold", "Weave", "Generator", "Mix",
+                                               "Master EQ", "Master color", "Master out", "LFO", "Setup", "Debug"};
+ static char *s_cat(char *b, const char *s);
+ static char *num_s(uint32_t v, char *b);
+@@ -118,7 +118,7 @@ static uint32_t glfo_route(void)                 /* the tracks it moves: bit t *
+ static int mst_base(int p) { return p == P_MASTER ? MS_EQ_LO : p == P_MASTER2 ? MS_CTYPE : MS_PERC; }   /* its first knob */
+ static const struct { uint8_t btn, first, n; } PAGE_BTN[] = {
+     {B_HOME, P_ARRANGE, 2}, {B_SEQ, P_STEPS, 2}, {B_EDIT, P_ENGINE, 4}, {B_ENV, P_ENV, 4}, {B_FX, P_CHARACTER, 5},
+-    {B_LFO, P_LFO, 2}, {B_ARP, P_PLAYERS, 4}, {B_GLO, P_MIX, 7}};
++    {B_LFO, P_LFO, 2}, {B_ARP, P_PLAYERS, 5}, {B_GLO, P_MIX, 7}};
+ #define NPAGE_BTN (sizeof PAGE_BTN / sizeof PAGE_BTN[0])
+ static int page_group(int p)
+ {
+@@ -268,7 +268,7 @@ enum { A_CLEAR_NOTES, A_CLEAR_LOCKS, A_CLEAR_BOTH, A_COPY_PAT, A_PASTE_PAT, A_RO
+        A_KIT, A_SAVE_KIT, A_MIDI_CC, A_USB_HOST, A_BT_MIDI, A_BT_AUDIO, A_BT_ADEV, A_BT_DEVICE, A_BT_DEV, A_BT_LOOK,
+        A_BT_FORGET, A_BT_DISCONNECT, A_CLEAR, A_ROTATE, A_PASTE, A_COPY_EMPTY, A_CLEAR_BAR,
+        A_COPY_SOUND, A_PASTE_SOUND, A_COPY_KEY, A_PASTE_KEY, A_COPY_SCENE, A_PASTE_SCENE, A_DUP_SLOT, A_KIT_FILTER,
+-       A_SHIFT, NACTIONS };
++       A_SHIFT, A_GEN_COMMIT, NACTIONS };
+ static const char *const ACTION_NAME[NACTIONS] = {
+     "CLEAR NOTES", "CLEAR LOCKS", "CLEAR NOTES AND LOCKS", "COPY PATTERN", "PASTE PATTERN", "ROTATE FORWARD",
+     "ROTATE BACK", "DUPLICATE BAR", "ENGINE", "PRESET", "SCRAMBLE", "SAVE AS PRESET", "RESET SOUND", "FOLLOWS CONDUCTOR",
+@@ -279,7 +279,7 @@ static const char *const ACTION_NAME[NACTIONS] = {
+     "PASTE LOCKS ONLY", "DOUBLE PATTERN", "CLEAR LOCKS", "CC OUT", "SCENES OUT", "KIT", "SAVE KIT", "KNOB CC",
+     "USB PORT", "BT MIDI", "BT AUDIO", "AUDIO DEVICE", "MIDI DEVICE", "DEVICE", "LOOK AGAIN", "FORGET", "DISCONNECT",
+     "CLEAR", "ROTATE", "PASTE", "COPY TO EMPTY", "CLEAR BAR", "COPY SOUND", "PASTE SOUND", "COPY DRUM", "PASTE DRUM",
+-    "COPY SCENE", "PASTE SCENE", "DUPLICATE SLOT", "KIT FILTER", "SHIFT NOTES"};
++    "COPY SCENE", "PASTE SCENE", "DUPLICATE SLOT", "KIT FILTER", "SHIFT NOTES", "COMMIT GENERATOR"};
+ static const char *const CLEAR_WHAT[3] = {"notes", "locks", "notes and locks"};
+ /* a MIDI track's eight rows of A_MIDI_CC: each knob's CC (ui.c list_midi_knob reads the digit back) */
+ static const char *const MIDI_CC_ROW[8] = {"KNOB 1 CC", "KNOB 2 CC", "KNOB 3 CC", "KNOB 4 CC", "KNOB 5 CC",
+@@ -299,7 +299,7 @@ static struct {
+ /* the undo: one stage, whatever was changed last (HOME + REC swaps it back, HOME + PLAY swaps again: redo): a
+  * pattern with its locks, a track's sound (or T2-T8 at once), the master, or the arrangement (song, scenes, weave) */
+ enum { U_PAT, U_SOUND, U_MASTER, U_ARR };
+-#define UNDO_LANES 13                     /* (a pattern's 12 locks and its random pool) */
++#define UNDO_LANES 14                     /* (a pattern's 12 locks, its random pool and its generator) */
+ static struct {
+     uint8_t valid, redo, kind, trk, n, pt, nl, rsv;
+     uint32_t t;
+@@ -649,8 +649,9 @@ static int group_n(int g)
+                                           * key's model has eight knobs) */
+     if (b == B_ARP)                                  /* (grp_page: Players, Players 2, Hold the arp's, Weave) */
+         return is_aux(trk) ? 1
+-             : is_drum(trk) || pl_type(trk) == PL_OFF ? 2
+-             : pl_type(trk) == PL_ARP || pl_type(trk) == PL_RAND ? 4 : 3;
++             : is_drum(trk) ? 2
++             : pl_type(trk) == PL_OFF ? 3
++             : pl_type(trk) == PL_ARP || pl_type(trk) == PL_RAND ? 5 : 4;   /* (Generator last, but a kit's) */
+     if (b == B_ENV)
+         return is_drum(trk) ? 4 : is_midi(trk) ? 1 : 3;   /* a kit: the key's envelope, filter; the kit's envelope,
+                                                            * filter (a MIDI track: none, page_button stays) */
+@@ -685,14 +686,17 @@ static int grp_page(int g, int i)
+     if (PAGE_BTN[g].btn == B_FX && is_midi(sel_trk()))
+         return P_FX1 + i % 3;                        /* (a MIDI track: no sound for Character or Sends) */
+     if (PAGE_BTN[g].btn == B_ARP) {
+-        static const uint8_t ARPP[4] = {P_PLAYERS, P_PLAYERS2, P_PLAYERS3, P_WEAVE};
+-        static const uint8_t OTHER[3] = {P_PLAYERS, P_PLAYERS2, P_WEAVE};
++        static const uint8_t ARPP[5] = {P_PLAYERS, P_PLAYERS2, P_PLAYERS3, P_WEAVE, P_GEN};
++        static const uint8_t OTHER[4] = {P_PLAYERS, P_PLAYERS2, P_WEAVE, P_GEN};
++        static const uint8_t NOPL[3] = {P_PLAYERS, P_WEAVE, P_GEN};
+         int trk = sel_trk();
+         if (is_aux(trk))
+             return P_WEAVE;
+-        if (is_drum(trk) || pl_type(trk) == PL_OFF)
+-            return i & 1 ? P_WEAVE : P_PLAYERS;      /* (a kit, or no player: its page shows it off, then Weave) */
+-        return pl_type(trk) == PL_ARP || pl_type(trk) == PL_RAND ? ARPP[i & 3] : OTHER[(i % 3 + 3) % 3];
++        if (is_drum(trk))
++            return i & 1 ? P_WEAVE : P_PLAYERS;      /* (a kit: its page shows it off, then Weave) */
++        if (pl_type(trk) == PL_OFF)
++            return NOPL[(i % 3 + 3) % 3];            /* (no player: Players shows it off, then Weave, Generator) */
++        return pl_type(trk) == PL_ARP || pl_type(trk) == PL_RAND ? ARPP[(i % 5 + 5) % 5] : OTHER[(i % 4 + 4) % 4];
+     }
+     return PAGE_BTN[g].first + i;
+ }
+@@ -717,8 +721,8 @@ static int tp_page_param(int p, int k, int trk)
+         {TP_E1, TP_E2, TP_E3, TP_E4}, {TP_E1, TP_E2, TP_E3, TP_E4}, {-1, -1, -1, -1},
+         {TP_LTYPE, TP_LSPEED, TP_LAMT, TP_LDEST},
+         {TP_LX, TP_LX2, -1, -1}, {TP_PLAYER, TP_P1, TP_P2, TP_P3}, {TP_AP1, TP_AP2, TP_AP3, TP_AP4},
+-        {TP_P4, -1, -1, -1}, {-1, -1, -1, -1}, {TP_SEND1, TP_SEND2, TP_PAN, TP_LEVEL}};
+-    if (p < P_ENGINE || p > P_MIX || p == P_THROWS || p == P_WEAVE || k < 0 || k > 3)
++        {TP_P4, -1, -1, -1}, {-1, -1, -1, -1}, {-1, -1, -1, -1}, {TP_SEND1, TP_SEND2, TP_PAN, TP_LEVEL}};
++    if (p < P_ENGINE || p > P_MIX || p == P_THROWS || p == P_WEAVE || p == P_GEN || k < 0 || k > 3)
+         return -1;
+     if (fx_page(p))                                  /* (the effect tracks' own knobs, whatever trk is) */
+         return M[p - P_ENGINE][k];
+@@ -918,7 +922,7 @@ static void draw_header(void)
+     if (ask)
+         h = hash_s(h, ui.ask_q);
+     meters_take();
+-    if (((ui.page >= P_STEPS && ui.page <= P_PLAYERS3) || ui.page == P_WEAVE) && ui.page != P_THROWS)
++    if (((ui.page >= P_STEPS && ui.page <= P_PLAYERS3) || ui.page == P_WEAVE || ui.page == P_GEN) && ui.page != P_THROWS)
+         mh = hdr_meter(page_trk(ui.page));
+     h = hash_u(h, (uint32_t)mh);
+     if (h == ui.sig[0])
+@@ -965,7 +969,7 @@ static void draw_header(void)
+         const char *bn = BTN_LABEL[PAGE_BTN[page_group(ui.page)].btn];
+         const char *pn = lst.open && lst.bt ? (lst.bt == 1 ? "Audio devices" : "MIDI devices") : page_name_of(ui.page, sel_trk());
+         int32_t w = text_w(&FONT_XS, bn) + 6;
+-        if (((ui.page >= P_STEPS && ui.page <= P_PLAYERS3) || ui.page == P_WEAVE) && ui.page != P_THROWS) {   /* a track's page */
++        if (((ui.page >= P_STEPS && ui.page <= P_PLAYERS3) || ui.page == P_WEAVE || ui.page == P_GEN) && ui.page != P_THROWS) {   /* a track's page */
+             int pt = page_trk(ui.page);
+             const char *tn = TRACK_NAME[pt];
+             int32_t tw = text_w(&FONT_XS, tn) + 10;
+@@ -1576,6 +1580,27 @@ static void page_knobs(knob_t *k)
+         }
+         break;
+     }
++    case P_GEN: {                                    /* the track's generator (per pattern): the mode and its three settings */
++        static const char *const GN[NGEN] = {"off", "euclid", "turing"};
++        static char v[3][8];
++        uint8_t g[4];
++        if (is_aux(trk) || is_drum(trk))
++            break;
++        lane_gen_get(pats.lane, trk, cur_pat(trk), g);
++        kname(&k[0], "MODE", GN, g[0], NGEN);
++        for (int i = 0; i < 3; i++)
++            num_s(g[i + 1], v[i]);
++        if (g[0] == GEN_EUCLID) {
++            kv(&k[1], "LENGTH", v[0], g[1], NSTEP);
++            kv(&k[2], "HITS", v[1], g[2], NSTEP);
++            kv(&k[3], "ROTATE", v[2], g[3], NSTEP - 1);
++        } else if (g[0] == GEN_TURING) {
++            kv(&k[1], "LENGTH", v[0], g[1], 16);
++            kv(&k[2], "LOCK", v[1], g[2], 127);
++            kv(&k[3], "DENSITY", v[2], g[3], 127);
++        }
++        break;
++    }
+     case P_THROWS: {
+         static const char *const LATCH[2] = {"off", "on"};
+         kname(&k[0], "LATCH", LATCH, proj.trk[AUX_PUNCH].par[TP_E1] & 1u, 2);
+@@ -1919,6 +1944,9 @@ static void page_footer(char *t)
+     case P_WEAVE:
+         s_cat(t, "BLACK the track woven in|WHITE its pattern");
+         break;
++    case P_GEN:
++        s_cat(t, seq_gen_mode(&seq, trk) ? "SEL commit|KEYS play" : "KEYS play");
++        break;
+     case P_MASTER3:
+         s_cat(t, "SEL pump by, level|KEYS play");
+         break;
+@@ -2213,7 +2241,7 @@ static const struct { uint8_t btn; uint32_t pages; const char *title, *l1, *l2;
+     {B_FX, PG_ANY, "Effects", "Character, sends, FX I, FX II, then Throws: keys fire effects.",
+      "PRESETS: the type or effect. SEL: an FX's filter."},
+     {B_LFO, PG_ANY, "LFO", "Type, then its first three knobs.", "Page 2 has the type's fourth and fifth."},
+-    {B_ARP, PG_ANY, "Players", "Arp, strum, hold or random; last page, Weave.",
++    {B_ARP, PG_ANY, "Players", "Arp, strum, hold or random; then Weave and Generator.",
+      "Random: tap steps as active slots; SEQ picks the pool."},
+     {B_ARP, PG_STEPS, "Tricks", "With a step held, ARP: KNOB 1 and 3 pick its two tricks,",
+      "KNOB 2 and 4 their values. Let go of the step when done."},
+@@ -2677,6 +2705,9 @@ static void list_build(void)
+     } else if (steps_page(keep)) {
+         if (is_seqt(trk))
+             list_steps(trk);
++    } else if (keep == P_GEN) {
++        if (seq_gen_mode(&seq, trk))
++            list_add(ACTION_NAME[A_GEN_COMMIT], 0, LK_ACTION, A_GEN_COMMIT);
+     } else if (keep == P_WEAVE) {
+         if (wv_from(trk)) {
+             int to = pat_first_empty(trk);
+@@ -3080,6 +3111,13 @@ static void cell_note(int n, char *b)               /* a note's name in a cell;
+ /* how many steps a step's note covers (its length, rounded up; the pattern's note length is under a step) */
+ static int step_cover(const step_t *st) { return st->len ? (step_len_q(st->len) + 3) / 4 : 1; }
+ /* WEAVE's Steps: the bar of its pattern, each step the tracks it weaves (names; more: "+n") and how long (the bar) */
++static uint32_t hash_gen(uint32_t h, int trk)          /* a generator track's shadow (the cells repaint as it changes) */
++{
++    for (int i = 0; i < NSTEP; i += 4)
++        h = hash_u(h, (uint32_t)seq.gen_s[trk][i] | (uint32_t)seq.gen_s[trk][i + 1] << 8 | (uint32_t)seq.gen_s[trk][i + 2] << 16 |
++                          (uint32_t)seq.gen_s[trk][i + 3] << 24);
++    return hash_u(h, (uint32_t)seq.gen_p[trk][0]);
++}
+ static void draw_weave_steps(void)
+ {
+     const wvpat_t *wp = &pats.weave[pats.scene[cur_scene()].weave % NPATT];
+@@ -3132,7 +3170,7 @@ static void draw_steps(void)
+         return;
+     }
+     {
+-    int trk = sel_trk(), drum = is_drum(trk), pt = cur_pat(trk), ph = eng_step[trk];
++    int trk = sel_trk(), drum = is_drum(trk), pt = cur_pat(trk), ph = eng_step[trk], gen = seq_gen_mode(&seq, trk) != 0;
+     const tpat_t *tp = tpat(trk);
+     uint32_t h = hash_u(hash_u(2166136261u, 0x57u), (uint32_t)trk | (uint32_t)pt << 4 | (uint32_t)ui.bar << 8 |
+                                           (uint32_t)ui.held << 10 | (uint32_t)ui.dsound << 26);
+@@ -3141,6 +3179,8 @@ static void draw_steps(void)
+                       (uint32_t)ui.lockpg << 24 | (uint32_t)(seq.rec_wait != 0) << 30);
+     h = hash_u(h, ui.trickpg | (uint32_t)ui.rem_fx << 16 | (uint32_t)(ui.frame / 8 & 1u) << 31);
+     h = hash_pat(h, tp);
++    if (gen)
++        h = hash_gen(h, trk);
+     h = hash_s(hash_u(h, proj.trk[trk].par[TP_ENGINE]), proj.trk[trk].name);   /* the sound's name, shown */
+     for (int i = 0; i < 4; i++)
+         h = hash_u(h, ui.rem[i]);
+@@ -3209,11 +3249,19 @@ static void draw_steps(void)
+     for (int i = 0; i < 16; i++) {
+         int s = ui.bar * 16 + i, in = s < tp->len, held = ui.held >> i & 1u, on, implicit;
+         const step_t *st = &tp->st[s];
++        step_t gst;
++        int live = 0;
+         int32_t x = ST_X + (i % 8) * ST_CW, y = ST_Y + (i / 8) * (ST_CH + 4);
+         uint16_t bg, fg;
+         hit_t hm;
+-        on = in && (pl_type(trk) == PL_RAND ? step_slot_on(tp, s) : step_on(st, trk));
+-        implicit = on && pl_type(trk) == PL_RAND && !step_slot_set(tp, s);   /* none set: all on, shown plain */
++        if (gen && in && seq_gen_vel(&seq, trk, s) && step_empty(st)) {   /* a generated hit: the root, as it plays */
++            gst = *st;
++            step_root(tp, gst.note);
++            st = &gst;
++            live = 1;
++        }
++        on = in && (gen ? seq_gen_vel(&seq, trk, s) > 0 : pl_type(trk) == PL_RAND ? step_slot_on(tp, s) : step_on(st, trk));
++        implicit = on && !gen && pl_type(trk) == PL_RAND && !step_slot_set(tp, s);   /* none set: all on, shown plain */
+         bg = !in ? K_BG : on && !implicit ? K_TINT : K_PANEL;
+         if (playing() && s == ph && in)
+             bg = on ? K_NOW : K_NOW_T;
+@@ -3323,8 +3371,15 @@ static void draw_steps(void)
+             ga_text("%", x + 3, y + ST_MK + 4 + cv_oy, x + 7, y + ST_MK + 10 + cv_oy, 0);   /* audited as a label */
+ #endif
+         }
++        if (live) {                                  /* a live hit (the generator's, not the pattern's): a four-pointed star */
++            static const uint8_t STAR[7] = {0x08, 0x08, 0x1C, 0x7F, 0x1C, 0x08, 0x08};
++            for (int r = 0; r < 7; r++)
++                for (int b = 0; b < 7; b++)
++                    if (STAR[r] >> (6 - b) & 1u)
++                        cv_rect(x + ST_CW - 11 + b, y + 2 + r, 1, 1, bg == K_NOW ? K_BG : K_NOW);
++        }
+         if (step_has_lock(pats.lane, trk, pt, s))
+-            cv_round(x + ST_CW - 9, y + 3, 4, 4, 2, K_REC);
++            cv_round(x + ST_CW - 9, y + (live ? 11 : 3), 4, 4, 2, K_REC);
+     }
+     {   /* lengths: a bar from a step across the steps its note covers, past the bar and round from the pattern's end
+          * to its start; an arrow where it goes on onto another bar (or round), one in where it came from one */
+@@ -5178,6 +5233,50 @@ static void weave_row(int32_t y, const char *label, uint16_t lc, const tpat_t *p
+             cv_rect(x + 4, y + 9, 1, 2, K_LINE);     /* (the beats, where nothing is) */
+     }
+ }
++static void draw_gen(void)                           /* the generator page: the live shadow, the four bars at once */
++{
++    int trk = sel_trk(), pt = cur_pat(trk), ph = eng_step[trk], mode = seq_gen_mode(&seq, trk);
++    const tpat_t *tp = tpat(trk);
++    uint8_t rn[SN];
++    uint32_t h = hash_u(hash_u(2166136261u, 0x47u), (uint32_t)trk | (uint32_t)pt << 4 | (uint32_t)(playing() ? ph + 1 : 0) << 8 |
++                                          (uint32_t)tp->len << 16 | (uint32_t)(step_root(tp, rn) + 1) << 24);
++    char t[40], *e;
++    if (is_aux(trk) || is_drum(trk))
++        h = hash_u(h, 0xFEu);
++    else
++        h = hash_u(hash_gen(h, trk), (uint32_t)rn[0] | (uint32_t)rn[1] << 8 | (uint32_t)rn[2] << 16 | (uint32_t)rn[3] << 24);
++    if (!begin_main(h))
++        return;
++    if (is_aux(trk) || is_drum(trk)) {
++        text_c(120, 40, &FONT_B, "no generator here", K_TEXT);
++        text_c(120, 64, &FONT_S, "a melodic track's pattern", K_DIM);
++    } else if (!mode) {
++        text_c(120, 30, &FONT_B, "generator off", K_TEXT);
++        text_c(120, 54, &FONT_S, "KNOB 1: euclid or turing", K_DIM);
++        text_c(120, 72, &FONT_S, "it plays a live copy of the steps", K_DIM);
++    } else {
++        e = note_name(rn[0], s_cat(s_cat(s_cat(t, TRACK_NAME[trk]), mode == GEN_EUCLID ? " euclid" : " turing"), ", root "));
++        if (rn[1])                                   /* a chord: the lowest note and how many more */
++            num_s((uint32_t)(rn[2] ? rn[3] ? 3 : 2 : 1), s_cat(e, " +"));
++        cv_text(4, 0, &FONT_XS, t, K_TEXT);
++        for (int b = 0; b < NBAR; b++)
++            for (int i = 0; i < 16; i++) {
++                int s = b * 16 + i, in = s < tp->len, v = seq_gen_vel(&seq, trk, s);
++                int32_t x = 4 + i * 14, y = 16 + b * 26;
++                uint16_t bg = !in ? K_BG : v ? K_TINT : K_PANEL;
++                cv_round(x, y, 13, 22, 2, bg);
++                if (!in)
++                    cv_frame(x, y, 13, 22, 2, K_LINE, K_BG);
++                else if (playing() && s == ph)       /* the playhead: a frame (under the bar, which keeps its colour) */
++                    cv_frame(x, y, 13, 22, 2, K_TEXT, bg);
++                if (in && v) {                       /* the hit: a bright bar from the foot, as tall as its velocity */
++                    int32_t hh = 3 + v * 18 / 127;
++                    cv_round(x + 1, y + 22 - hh - 1, 11, hh, 1, K_NOW);
++                }
++            }
++    }
++    cv_blit(0, MAIN_Y);
++}
+ static void draw_weave(void)
+ {
+     int trk = sel_trk(), f = wv_from(trk), r = wv_rule(trk);
+@@ -5332,6 +5431,7 @@ static void draw_page(void)
+     case P_MIX: draw_mix(); break;
+     case P_THROWS: draw_punch(); break;
+     case P_WEAVE: draw_weave(); break;
++    case P_GEN: draw_gen(); break;
+     case P_MASTER: case P_MASTER3: draw_master(); break;
+     case P_MASTER2: draw_master_color(); break;
+     case P_GLFO: draw_glfo(); break;
+diff --git a/app/seq/pattern.c b/app/seq/pattern.c
+index eb837b5..979f276 100644
+--- a/app/seq/pattern.c
++++ b/app/seq/pattern.c
+@@ -167,6 +167,31 @@ int lane_pool_set(lane_t *L, int trk, int pat, uint16_t mask)
+     return 0;
+ }
+ 
++int lane_gen_get(const lane_t *L, int trk, int pat, uint8_t g[4])
++{
++    int k = lane_find(L, trk, pat, LANE_GEN), i;
++    for (i = 0; i < 4; i++)
++        g[i] = k < 0 ? 0u : L[k].val[i] == LOCK_NONE ? 0u : L[k].val[i];
++    if (g[0] >= NGEN)
++        g[0] = GEN_OFF;
++    return g[0];
++}
++
++int lane_gen_set(lane_t *L, int trk, int pat, const uint8_t g[4])
++{
++    int k = lane_find(L, trk, pat, LANE_GEN), i;
++    if (g[0] == GEN_OFF) {            /* off: no lane at all */
++        if (k >= 0)
++            lane_clear(L, k);
++        return 0;
++    }
++    if (k < 0 && (k = lane_alloc(L, trk, pat, LANE_GEN)) < 0)
++        return -1;
++    for (i = 0; i < 4; i++)
++        L[k].val[i] = g[i];
++    return 0;
++}
++
+ void step_clear_locks(lane_t *L, int trk, int pat, int step)
+ {
+     int k;
+@@ -240,6 +265,21 @@ int step_empty(const step_t *st)
+     return 1;
+ }
+ 
++int step_root(const tpat_t *p, uint8_t n[SN])
++{
++    int i, k;
++    for (i = 0; i < NSTEP; i++)
++        if (!step_empty(&p->st[i]) && p->st[i].note[0]) {
++            for (k = 0; k < SN; k++)
++                n[k] = p->st[i].note[k];
++            return i;
++        }
++    n[0] = 60;
++    for (k = 1; k < SN; k++)
++        n[k] = 0;
++    return -1;
++}
++
+ /* the kit's steps (seq.h): the interrupt reads note[0] and note[1] apart, so a change between them plays at
+  * most one step half old */
+ void kit_set(step_t *st, uint32_t mask)
+diff --git a/app/seq/pattern.h b/app/seq/pattern.h
+index 1d4d635..5e740f7 100644
+--- a/app/seq/pattern.h
++++ b/app/seq/pattern.h
+@@ -134,10 +134,15 @@ static inline int lane_is_step_note(unsigned param)   /* a lane of a step's note
+     return param == LANE_TUNE || (param >= LANE_VEL0 && param < LANE_VEL0 + 32u);
+ }
+ static inline int lane_is_hit(unsigned param) { return param >= LANE_HIT0 && param < LANE_HIT0 + NDRUM; }
++/* a track's generator, per pattern: val[0] the mode (GEN_*), val[1..3] its three settings (one lane for the
++ * pattern, not a per-step lane; seq.c gen_*) */
++#define LANE_GEN 0xFFFCu
+ static inline int lane_is_pool(unsigned param) { return param == LANE_POOL; }
++static inline int lane_is_gen(unsigned param) { return param == LANE_GEN; }
++static inline int lane_is_pat(unsigned param) { return param == LANE_POOL || param == LANE_GEN; }   /* a whole-pattern lane: no step positions */
+ static inline int lane_is_note(unsigned param)   /* a lane of notes, not locks (project keeps these) */
+ {
+-    return lane_is_step_note(param) || lane_is_pool(param);
++    return lane_is_step_note(param) || lane_is_pat(param);
+ }
+ #define TUNE_0 64
+ #define TUNE_MAX 24
+@@ -232,6 +237,9 @@ int step_vel(const lane_t *L, int trk, int pat, int step, int sound);   /* a kit
+ const hit_t *step_hit(const patterns_t *P, int trk, int pat, int step, int sound);
+ uint16_t lane_pool_get(const lane_t *L, int trk, int pat);              /* a random pattern's pool mask, 0 none */
+ int lane_pool_set(lane_t *L, int trk, int pat, uint16_t mask);          /* -1 = no lane free */
++enum { GEN_OFF, GEN_EUCLID, GEN_TURING, NGEN };                          /* a track's generator (LANE_GEN val[0]) */
++int lane_gen_get(const lane_t *L, int trk, int pat, uint8_t g[4]);     /* mode and its three settings; 0 = off (g zeroed) */
++int lane_gen_set(lane_t *L, int trk, int pat, const uint8_t g[4]);     /* mode 0 frees the lane; -1 = no lane free */
+ extern volatile uint16_t lane_epoch;     /* bumped when a lane is allocated or freed (the ISR's pool cache) */
+ void pattern_clear_locks(lane_t *L, int trk, int pat);   /* (not the kit tune lane: that is notes) */
+ void cond_ab(int k, int *a, int *b);  /* COND_AB + k -> A:B */
+diff --git a/app/seq/seq.c b/app/seq/seq.c
+index 928874c..97f425e 100644
+--- a/app/seq/seq.c
++++ b/app/seq/seq.c
+@@ -1524,6 +1524,7 @@ static void resync(seq_t *s, int t)
+     }
+ }
+ 
++static void gen_load(seq_t *s, int t, int again);
+ static void track_reset(seq_t *s, int t)
+ {
+     seq_trk_t *tr = &s->t[t];
+@@ -1557,6 +1558,8 @@ static void track_reset(seq_t *s, int t)
+     tr->age = 0;
+     for (k = 0; k < NSC; k++)
+         tr->act[k] = 0;
++    if (t < NTRK)
++        gen_load(s, t, 1);                     /* a generator starts again (TURING from the pattern's steps) */
+ }
+ 
+ static void restart(seq_t *s, uint32_t tracks)   /* tracks whose pattern switched: from step 1 */
+@@ -1575,6 +1578,101 @@ static void restart(seq_t *s, uint32_t tracks)   /* tracks whose pattern switche
+     }
+ }
+ 
++/* ------------------------------------------------------------- generators --- */
++/* A track with a generator (pattern.h LANE_GEN: the mode and three settings, per pattern) plays a live shadow of
++ * its steps (seq.h gen_s), not the stored ones; the stored pattern stays as it was until COMMIT writes the shadow
++ * in. A hit with notes of its own in the pattern plays them; one without plays the track's root (the first note
++ * the pattern holds, else 60). The tricks, chance and nudge of the stored step stay too.
++ *   EUCLID  length (1..64), hits, rotate: the hits spread evenly over the length, rotated; the cycle repeats
++ *           from step 1 of every pass. A pure function of the settings
++ *   TURING  a shift register of length (2..16) bits, the classic looping random-sequence idea: each step it
++ *           turns one place round, and the bit that wraps from one end to the other is inverted at a chance the
++ *           lock sets (127: never, so the loop repeats exactly every length steps; falling to 0: a coin toss, the
++ *           chance rising with the square of the turn, so the last stretch before 127 is the fine one). The
++ *           register's top seven bits are the step's value: it plays when that is within the density (0: never,
++ *           127: every step), at a velocity from the register's low four bits. It starts from the pattern's own
++ *           steps */
++static int gen_ok(const seq_t *s, int t) { return t >= 0 && t < NTRK && !is_drum(s, t); }
++static void gen_euclid(seq_t *s, int t)
++{
++    const uint8_t *g = s->gen_p[t];
++    int n = g[1] < 1 ? 1 : g[1] > NSTEP ? NSTEP : g[1], h = g[2] > n ? n : g[2], r = g[3] % n, i;
++    for (i = 0; i < NSTEP; i++) {
++        int k = (i % n + n - r) % n;
++        s->gen_s[t][i] = h && (k * h) % n < h ? 0x80u | 100u : 0u;
++    }
++}
++static void gen_turing_seed(seq_t *s, int t)       /* the register and the shadow from the stored pattern */
++{
++    const tpat_t *tp = tpat(s, t);
++    int n = s->gen_p[t][1] < 2 ? 2 : s->gen_p[t][1] > 16 ? 16 : s->gen_p[t][1], i, len = pat_len(tp);
++    uint32_t reg = 0;
++    for (i = 0; i < n; i++)
++        reg |= (uint32_t)(i < len && !step_empty(&tp->st[i])) << i;
++    if (!reg)
++        reg = (st_hash(0x7E57u ^ (uint32_t)(t + 1) * 0x9E3779B9u) & ((1u << n) - 1u)) | 1u;
++    s->gen_reg[t] = (uint16_t)reg;
++    for (i = 0; i < NSTEP; i++) {
++        int v = tp->st[i].vel > 127 ? 127 : tp->st[i].vel ? tp->st[i].vel : 100;
++        s->gen_s[t][i] = i < len && !step_empty(&tp->st[i]) ? (uint8_t)(0x80u | (unsigned)v) : 0u;
++    }
++}
++static void gen_load(seq_t *s, int t, int again)   /* track t's lane settings and its shadow (again: from the pattern) */
++{
++    int pat = s->ppat[t] < NPATT ? s->ppat[t] : 0, was = s->gen_p[t][0], k;
++    uint8_t g[4] = {0, 0, 0, 0};
++    if (gen_ok(s, t))
++        lane_gen_get(s->P->lane, t, pat, g);
++    again |= g[0] != was || pat != s->gen_pat[t];
++    s->gen_pat[t] = (uint8_t)pat;
++    for (k = 0; k < 4; k++)
++        s->gen_p[t][k] = g[k];
++    if (g[0] == GEN_EUCLID)
++        gen_euclid(s, t);
++    else if (g[0] == GEN_TURING && again)
++        gen_turing_seed(s, t);
++}
++static void gen_refresh(seq_t *s)      /* the lanes' settings and the shadows, once a seq_advance call */
++{
++    uint32_t dirty = s->gen_dirty;
++    int t;
++    s->gen_dirty = 0;
++    for (t = 0; t < NTRK; t++)
++        if ((dirty >> t & 1u) || (s->ppat[t] < NPATT ? s->ppat[t] : 0) != s->gen_pat[t] || s->gen_ep != lane_epoch)
++            gen_load(s, t, 0);
++    s->gen_ep = lane_epoch;
++}
++static void gen_turing_step(seq_t *s, int t, int p)   /* step p of a TURING track starts: the register decides it */
++{
++    const uint8_t *g = s->gen_p[t];
++    int n = g[1] < 2 ? 2 : g[1] > 16 ? 16 : g[1], lock = g[2] > 127 ? 127 : g[2], d = g[3] > 127 ? 127 : g[3];
++    uint32_t reg = s->gen_reg[t] & ((1u << n) - 1u), wrap = reg & 1u, u = (uint32_t)(127 - lock), v;
++    if ((rng_next(&s->t[t].rng) >> 8 & 0xFFFFu) < u * u * 32768u / 16129u)   /* (u = 127: half) */
++        wrap ^= 1u;
++    reg = reg >> 1 | wrap << (n - 1);
++    s->gen_reg[t] = (uint16_t)reg;
++    v = n >= 7 ? reg >> (n - 7) : reg << (7 - n);         /* the top seven bits, 0..127 */
++    s->gen_s[t][p] = d && v <= (uint32_t)d ? (uint8_t)(0x80u | (56u + 4u * (reg & 15u))) : 0u;
++}
++/* the step a generator track plays at p: the stored one (its tricks, notes) with the shadow's velocity, or the
++ * root for a hit that has no notes; no notes when the shadow has no hit */
++static const step_t *gen_step(const seq_t *s, int t, const tpat_t *tp, int p, const step_t *st, step_t *out)
++{
++    uint8_t v = s->gen_s[t][p];
++    int i;
++    *out = *st;
++    if (!(v & 0x80u)) {
++        for (i = 0; i < SN; i++)
++            out->note[i] = 0;
++        return out;
++    }
++    out->vel = (uint8_t)(v & 0x7Fu ? v & 0x7Fu : 1u);
++    if (step_empty(st)) {
++        step_root(tp, out->note);
++    }
++    return out;
++}
++
+ /* ------------------------------------------------------------- a step --- */
+ /* the next step: a jump, the punch loop's span, or the next one; wrapped = a new pass begins (the
+  * pattern's end, the loop going back to its start, or a jump back or stay: a jump loop counts its passes, so
+@@ -1883,9 +1981,10 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
+     seq_trk_t *tr = &s->t[t];
+     const tpat_t *tp;
+     const step_t *st;
++    step_t gst;                       /* a generator track's step (gen_step) */
+     uint32_t L, carry = tr->to_next < SEQ_DUE ? tr->to_next : 0, nL;
+     int p, wrapped = 0, retrig = 1, happens = 0, plays, np, dummy, trig_ok = 1, lock_ok = 1, kind, cover = 0, rep = 0,
+-        lp, drum = t < NTRK && is_drum(s, t), rnd = rand_track(s, t);
++        lp, drum = t < NTRK && is_drum(s, t), rnd = rand_track(s, t), gen = t < NTRK && s->gen_p[t][0] != GEN_OFF && !drum;
+     int32_t off, noff;
+     if (!tr->started) {
+         tr->started = 1;
+@@ -1934,6 +2033,11 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
+     tr->ratchets = 1;
+     tr->flam_gap = 0;
+     tr->sub_to_next = NEVER;
++    if (gen) {                        /* the shadow decides the step (TURING: as it starts) */
++        if (!cover && s->gen_p[t][0] == GEN_TURING)
++            gen_turing_step(s, t, p);
++        st = gen_step(s, t, tp, lp, st, &gst);
++    }
+     if (drum) {
+         SQ_T(qc);
+         kit_step(s, t, st, p, L, carry, o);
+@@ -1959,7 +2063,7 @@ static void fire_step(seq_t *s, int t, const seq_sink_t *o)
+     if (retrig && trig_ok)
+         happens = cond_plays(s, t, st->cond);
+     plays = happens && !(s->mute >> t & 1u) && !punch_muted(s, t) && !tr->fill_on &&
+-            (rnd ? step_slot_on(tp, cover ? lp : p) : !step_empty(st));
++            (gen ? (s->gen_s[t][lp] & 0x80u) != 0 : rnd ? step_slot_on(tp, cover ? lp : p) : !step_empty(st));
+     if (happens && !plays && !drum && t == brain_src(s))
+         brain_set_near_notes(s, st->note, SN);   /* (a FOLLOW track muted still sets the chords) */
+     if (happens && !rep && tr->act[SC_JUMP])
+@@ -3363,6 +3467,8 @@ void seq_init(seq_t *s, patterns_t *P, uint8_t (*par)[NTP_ALL])
+         tr->st_pool_lane = 0xFF;
+         tr->jump_to = 0xFF;
+         tr->bq_go = 0xFF;
++        if (t < NTRK)
++            s->gen_pat[t] = 0xFF;
+         s->ppat[t] = P->scene[0].pat[t] < NPATT ? P->scene[0].pat[t] : 0;
+         s->pcue[t] = 0xFF;
+         s->wv_rec_at[t] = 0xFF;
+@@ -3461,6 +3567,7 @@ void seq_advance(seq_t *s, uint32_t k, const seq_sink_t *o)
+         }
+     }
+     brain_follow_par(s);
++    gen_refresh(s);
+     if (s->req_stop) {
+         s->req_stop = 0;
+         s->req_start = s->req_cont = 0;
+diff --git a/app/seq/seq.h b/app/seq/seq.h
+index 5cff18f..d4a1506 100644
+--- a/app/seq/seq.h
++++ b/app/seq/seq.h
+@@ -238,6 +238,14 @@ typedef struct {
+     volatile uint8_t song_on;         /* the song decides the scenes */
+     volatile uint8_t song_pos, song_rep;
+     volatile uint8_t ppat[NSEQT];     /* each track's pattern (the scene's, or cued per track) */
++    /* generators (pattern.h LANE_GEN; seq.c gen_*): a track with one plays a live shadow of its steps, which the
++     * stored pattern does not change until COMMIT. gen_s[t][step]: bit 7 = a hit, bits 0..6 its velocity; gen_p
++     * the settings last read from the lane (mode, 3 values); gen_reg TURING's shift register. The interrupt
++     * writes the shadow, the main loop (the grid, COMMIT) reads it */
++    uint8_t gen_s[NTRK][NSTEP];
++    uint8_t gen_p[NTRK][4], gen_pat[NTRK];
++    uint16_t gen_reg[NTRK], gen_ep;
++    volatile uint8_t gen_dirty;       /* bit t: the main loop changed track t's lane: read it again */
+     volatile uint16_t mute;           /* bit t */
+     volatile uint8_t ext, clock, send_notes;   /* clock: SEQ_CLK_* */
+     volatile uint8_t metronome;       /* 0 off, 1 while recording, 2 on */
+@@ -374,10 +382,18 @@ int seq_step_rec(seq_t *s, int trk, int step, int note, int vel);   /* step reco
+                                                      * track's pattern (overdubs; the UI moves its cursor); 1 = written */
+ int seq_step_add_notes(seq_t *s, int trk, int step, const uint8_t *notes, int n, int vel);   /* a step held + keys:
+                                                      * each note toggled on the step; returns the notes it holds after */
++/* a generator track's shadow (the grid, the LEDs, COMMIT): the mode (GEN_*, 0 = none) and a step's velocity (0 = no hit) */
++static inline int seq_gen_mode(const seq_t *s, int t) { return t >= 0 && t < NTRK ? s->gen_p[t][0] : 0; }
++static inline int seq_gen_vel(const seq_t *s, int t, int step)
++{
++    return t >= 0 && t < NTRK && step >= 0 && step < NSTEP && (s->gen_s[t][step] & 0x80u) ? s->gen_s[t][step] & 0x7Fu : 0;
++}
+ /* step helpers (main loop) */
+ void step_set_notes(step_t *st, const uint8_t *notes, int n, int vel);
+ void step_toggle_note(step_t *st, int note);
+ int step_empty(const step_t *st);
++int step_root(const tpat_t *p, uint8_t n[SN]);   /* a generator's root: the notes of the first step that has any
++                                                  * (a chord is kept whole), else C4; returns that step, -1 none */
+ /* a random track's active slots: the steps holding a note or a trick; when none is set, every step plays */
+ static inline int step_slot_set(const tpat_t *p, int s)
+ {
+diff --git a/app/ui.c b/app/ui.c
+index 04425fa..4ee1bc6 100644
+--- a/app/ui.c
++++ b/app/ui.c
+@@ -38,7 +38,7 @@ static void say_as(const char *a, const char *b, uint32_t flags)
+     {
+         static const char *const DONE[] = {"SAVED", "CLEARED", "COPIED", "PASTED", "ROTATED", "DUPLICATED", "RECORDED",
+                                            "LOCKS CLEARED", "NEW PROJECT", "LOADED", "SCRAMBLED",
+-                                           "RESET", "INSERTED", "DELETED", "PRESET SAVED", "ALL NOTES OFF", "REMOVED", "WOVEN"};
++                                           "RESET", "INSERTED", "DELETED", "PRESET SAVED", "ALL NOTES OFF", "REMOVED", "WOVEN", "COMMITTED"};
+         const char *m = ui.msg[0];
+         ui.msg_kind = AL_INFO;
+         if (m[0] == 'U' && m[1] == 'N' && m[2] == 'D' && m[3] == 'O')
+@@ -152,6 +152,7 @@ static void apply_aux(int trk)
+         apply_fx(trk);
+ }
+ static void undo_keep(void);
++static void gen_knob(int trk, int k, int32_t e);
+ static void undo_sound(int trk);
+ static void undo_sounds(int first, int n);
+ static void undo_master(void);
+@@ -2233,6 +2234,9 @@ static void knob_do(int k, int32_t e)
+         if (k == 0)
+             set_tp(AUX_PUNCH, TP_E1, clampi(proj.trk[AUX_PUNCH].par[TP_E1] + (e > 0 ? 1 : -1), 0, 1));
+         return;
++    case P_GEN:
++        gen_knob(trk, k, e);
++        return;
+     case P_WEAVE:
+         weave_set(trk, k == 0 ? clampi(wv_from(trk) + (e > 0 ? 1 : -1), 0, NSEQT) : -1,
+                   k == 1 ? clampi(wv_pat(trk) + (e > 0 ? 1 : -1), 0, NPATT - 1) : -1,
+@@ -2288,6 +2292,73 @@ static void knob_do(int k, int32_t e)
+     if (seq.rec && playing() && !is_aux(trk))
+         seq_rec_knob(&seq, trk, p, proj.trk[trk].par[p]);
+ }
++/* the generator page (pages.c P_GEN): the track's generator for the pattern shown, in its lane (pattern.h LANE_GEN).
++ * KNOB 1 the mode (a mode's start values on a change), 2..4 its settings; the sequencer reads them at its next call */
++static void gen_knob(int trk, int k, int32_t e)
++{
++    uint8_t g[4];
++    int d = e > 0 ? 1 : -1, pt = cur_pat(trk);
++    if (trk >= NTRK || is_drum(trk))
++        return;
++    lane_gen_get(pats.lane, trk, pt, g);
++    if (k == 0) {
++        int m = clampi(g[0] + d, 0, NGEN - 1), len = tpat(trk)->len;
++        if (m == g[0])
++            return;
++        g[0] = (uint8_t)m;
++        if (m == GEN_EUCLID) {                       /* the pattern's length, a quarter of it hit */
++            g[1] = (uint8_t)clampi(len, 1, NSTEP);
++            g[2] = (uint8_t)clampi(g[1] / 4, 1, NSTEP);
++            g[3] = 0;
++        } else if (m == GEN_TURING) {                /* 8 bits, the loop mostly kept, most steps playing */
++            g[1] = 8;
++            g[2] = 100;
++            g[3] = 100;
++        } else {
++            g[1] = g[2] = g[3] = 0;
++        }
++    } else if (g[0] == GEN_EUCLID) {
++        g[k] = (uint8_t)clampi(g[k] + (int)e, k == 1 ? 1 : 0, k == 3 ? NSTEP - 1 : NSTEP);
++    } else if (g[0] == GEN_TURING) {
++        g[k] = (uint8_t)clampi(g[k] + (int)e, k == 1 ? 2 : 0, k == 1 ? 16 : 127);
++    } else {
++        return;
++    }
++    if (lane_gen_set(pats.lane, trk, pt, g) < 0) {
++        say_no("NO LANE FREE", "");
++        return;
++    }
++    seq.gen_dirty |= (uint8_t)(1u << trk);
++    mark_dirty();
++}
++/* COMMIT: the live copy written into the pattern (a hit on an empty step: the root, the shadow's velocity; a step with
++ * no hit: its notes go); the generator goes on from there */
++static void act_gen_commit(void)
++{
++    int trk = sel_trk();
++    uint8_t root[SN];
++    tpat_t *tp;
++    if (trk >= NTRK || is_drum(trk) || !seq_gen_mode(&seq, trk))
++        return;
++    tp = tpat(trk);
++    undo_keep();
++    step_root(tp, root);                          /* (before the steps change: a chord stays whole) */
++    for (int i = 0; i < NSTEP; i++) {
++        int v = seq_gen_vel(&seq, trk, i);
++        step_t *st = &tp->st[i];
++        if (!v) {
++            for (int j = 0; j < SN; j++)
++                st->note[j] = 0;
++        } else {
++            if (step_empty(st))
++                for (int j = 0; j < SN; j++)
++                    st->note[j] = root[j];
++            st->vel = (uint8_t)v;
++        }
++    }
++    mark_dirty();
++    say("COMMITTED", "generator");
++}
+ static void knob(int k, int32_t e)               /* a knob turned by hand: what it changes goes out as its CC */
+ {
+     uint8_t was = cc_hand;
+@@ -2356,7 +2427,7 @@ static void presets(int32_t e)
+             say("FILTER", tp_info_par(q, par)->names[par[q] % n]);
+         }
+         break;
+-    case P_THROWS: case P_WEAVE:
++    case P_THROWS: case P_WEAVE: case P_GEN:
+         break;
+     default:
+         if (is_fx(trk))
+@@ -2700,7 +2771,7 @@ static int paste_steps(int trk, int pt, int at, int from, int n, int locks_only)
+     int ok = 1;
+     for (int k = 0; k < NLANE; k++) {
+         lane_t *l = &pats.lane[k];
+-        if (l->used && l->trk == trk && l->pat == pt && !lane_is_pool(l->param) &&
++        if (l->used && l->trk == trk && l->pat == pt && !lane_is_pat(l->param) &&
+             !(locks_only && lane_is_note(l->param)))
+             for (int i = 0; i < n && at + i < NSTEP; i++)
+                 if (!(clip_trk == trk && clip_pat == pt && at + i >= from && at + i < from + n))
+@@ -2709,7 +2780,7 @@ static int paste_steps(int trk, int pt, int at, int from, int n, int locks_only)
+     for (int k = 0; k < NLANE; k++) {
+         const lane_t *l = &pats.lane[k];
+         int d;
+-        if (!l->used || l->trk != clip_trk || l->pat != clip_pat || lane_is_pool(l->param) ||
++        if (!l->used || l->trk != clip_trk || l->pat != clip_pat || lane_is_pat(l->param) ||
+             (locks_only && lane_is_note(l->param)))
+             continue;
+         d = lane_alloc(pats.lane, trk, pt, l->param);
+@@ -2774,7 +2845,7 @@ static void act_rotate(int d)
+         tp->st[n - 1] = keep;
+     }
+     for (int l = 0; l < NLANE; l++)
+-        if (pats.lane[l].used && pats.lane[l].trk == trk && pats.lane[l].pat == pt && !lane_is_pool(pats.lane[l].param)) {
++        if (pats.lane[l].used && pats.lane[l].trk == trk && pats.lane[l].pat == pt && !lane_is_pat(pats.lane[l].param)) {
+             uint8_t *v = pats.lane[l].val, k;
+             if (d > 0) {
+                 k = v[n - 1];
+@@ -2899,7 +2970,7 @@ static void act_clear_bar(void)
+         tp->st[i].vel = 100;
+     }
+     for (int k = 0; k < NLANE; k++)
+-        if (pats.lane[k].used && pats.lane[k].trk == trk && pats.lane[k].pat == pt && !lane_is_pool(pats.lane[k].param))
++        if (pats.lane[k].used && pats.lane[k].trk == trk && pats.lane[k].pat == pt && !lane_is_pat(pats.lane[k].param))
+             for (int i = b * 16; i < b * 16 + 16; i++)
+                 pats.lane[k].val[i] = LOCK_NONE;
+     mark_dirty();
+@@ -2992,7 +3063,7 @@ static void act_double(void)                     /* the pattern twice as long, p
+     for (int i = 0; i < n; i++)
+         tp->st[n + i] = tp->st[i];
+     for (int k = 0; k < NLANE; k++)
+-        if (pats.lane[k].used && pats.lane[k].trk == trk && pats.lane[k].pat == pt && !lane_is_pool(pats.lane[k].param))
++        if (pats.lane[k].used && pats.lane[k].trk == trk && pats.lane[k].pat == pt && !lane_is_pat(pats.lane[k].param))
+             for (int i = 0; i < n; i++)
+                 pats.lane[k].val[n + i] = pats.lane[k].val[i];
+     tp->len = (uint8_t)(n * 2);
+@@ -3527,6 +3598,7 @@ static void action_run(int a)
+     case A_CLEAR_STEP_LOCKS: step_clear_locks_held(); break;
+     case A_PASTE_BAR: case A_PASTE_STEP: case A_PASTE_LOCKS: act_paste(a == A_PASTE_LOCKS); break;
+     case A_WEAVE: act_keep_weave(); break;
++    case A_GEN_COMMIT: act_gen_commit(); break;
+     case A_ROT_FWD: act_rotate(1); say("ROTATED", "forward"); break;
+     case A_CLEAR:
+         action_run(ui.pick_clear % 3u == 0 ? A_CLEAR_NOTES : ui.pick_clear % 3u == 1 ? A_CLEAR_LOCKS : A_CLEAR_BOTH);
+@@ -3936,12 +4008,12 @@ static void leds(void)
+         if (ui.page >= PAGE_BTN[i].first && ui.page < PAGE_BTN[i].first + PAGE_BTN[i].n)
+             b |= 1u << PAGE_BTN[i].btn;
+     if (proj.lights) {
+-        if (steps_page(ui.page) && is_seqt(trk)) {
++        if ((steps_page(ui.page) || ui.page == P_GEN) && is_seqt(trk)) {
+             const tpat_t *tp = tpat(trk);
+-            int ph = eng_step[trk];
++            int ph = eng_step[trk], gen = seq_gen_mode(&seq, trk) != 0;
+             for (i = 0; i < 16; i++) {
+                 int s = ui.bar * 16 + (int)i;
+-                if (step_on(&tp->st[s], trk) && s < tp->len)
++                if ((gen ? seq_gen_vel(&seq, trk, s) > 0 : step_on(&tp->st[s], trk)) && s < tp->len)
+                     mid |= 1u << WHITE_K[i];         /* (the steps with notes: the mid level, brighter than the glow) */
+                 if (playing() && s == ph)
+                     k |= 1u << WHITE_K[i];
+diff --git a/docs/MANUAL.md b/docs/MANUAL.md
+index 44eb5e4..85c2f32 100644
+--- a/docs/MANUAL.md
++++ b/docs/MANUAL.md
+@@ -106,6 +106,8 @@ and turn **KNOB 4** (the pump) while it plays. Hold any button for a second and
+ - **Throw**: a momentary effect on the drums or the melodic tracks, played from a key on FX's Throws page.
+ - **Weave**: one track's pattern crossed live with another: bars or steps taking turns, or one pattern's rhythm
+   with the other's pitch. You set it up on the track's ARP pages and play it on the WEAVE track.
++- **Generator**: a mode on a track's ARP pages (euclid or turing) that makes the steps for you, live. It plays a
++  copy of the track's steps and leaves the pattern as it was until you commit it.
+ - **Groove**: a timing and velocity feel. The project picks the type, and each track sets how much it gets.
+ - **Pump**: the mix (everything but the drums) ducks on each kick and swells back (set on Master out). A track's
+   pump LFO does the same to that one track.
+@@ -143,7 +145,7 @@ press…" means keep **HOME** down while you press the next thing.
+ | play one bar of a long pattern, or jump about in it | Press **SEQ** and turn **SELECT** to the Bar page. Hold **SEQ** and press black key 1 to 4 to jump to that bar. Hold two of them to loop those bars, or tap one twice to loop that bar. <!-- hint: hold SEQ; black 1,2,3,4 --> |
+ | set the track scale | On Steps, turn **KNOB 3**. Or, on the Bar page of a synth track, press a black key: 1, 2, 3, 4, 5, 6, 8, 16 sixteenths a step, or black key 9 for half a sixteenth. <!-- hint: turn KNOB 3 --> |
+ | change the pattern | On Steps, turn **KNOB 1**. While it plays, the new pattern comes in at the next bar line. Until then, the knob reads NEXT 1>2 and the tag line says "next P2". |
+-| weave two patterns | On the track, press **ARP** and go to its last page, Weave. Press a black key for the track to weave in and a white key for its pattern; **KNOB 3** sets the rule. From then on, it plays woven. To bring it in by hand instead, set **KNOB 4** to "on WEAVE", then pick the WEAVE track with **ALGORITHM** and hold that track's white key. <!-- hint: press ARP; black 2; white 1; turn KNOB 3 --> |
++| weave two patterns | On the track, press **ARP** and go to its Weave page, after the Players pages. Press a black key for the track to weave in and a white key for its pattern; **KNOB 3** sets the rule. From then on, it plays woven. To bring it in by hand instead, set **KNOB 4** to "on WEAVE", then pick the WEAVE track with **ALGORITHM** and hold that track's white key. <!-- hint: press ARP; black 2; white 1; turn KNOB 3 --> |
+ | change the sound | Press **EDIT** and turn **PRESETS** to step through the engine's own sounds. A name like "BASS 3/11" tells you what the sound is for and where you are in the list. **SEL** changes the engine. |
+ | edit a drum sound | On a drum track, press **EDIT** and press the sound's black key. The knobs are the model's own four. Turn **SELECT** for the model, random, pan and volume. Its **SEL** list has the play mode. <!-- hint: press EDIT; black 1 --> |
+ | shape one drum | On a drum track, press **ENV** and press the drum's black key to get its own attack, hold, decay and lag. Turn **SELECT** for its filter: **PRESETS** picks low-pass, high-pass or band-pass, and the knobs set cutoff, resonance, envelope and drive. <!-- hint: press ENV; black 1 --> |
+@@ -429,7 +431,7 @@ A weave crosses what a track plays with another pattern, live, while the song pl
+ up a weave on a track, and from then on that track plays woven (the other track plays as it was). Or you can keep
+ the weave for the WEAVE track and bring it in by hand.
+ 
+-**Set it up.** On a track, press **ARP** and turn **SELECT** to the last page, Weave. Press a black key to choose
++**Set it up.** On a track, press **ARP** and turn **SELECT** to the Weave page (the one before the last). Press a black key to choose
+ the track to weave in: 1 to 8 are the tracks, 9 is COND and 10 is THROW, and pressing the same key again sets
+ none. Then press a white key, 1 to 8, to choose its pattern. **KNOB 1** (WITH: the track), **KNOB 2** (PATTERN: its
+ pattern) and **KNOB 3** (RULE) set the same things. The page spells it out in words ("T2 weaves with T1", "by
+@@ -472,6 +474,34 @@ FORWARD, then weave it by steps) makes variations. A drum pattern's rhythm with
+ 
+ <img src="img/screen-weave.png" width="240" alt="ARP's Weave page on T2: T2 weaves with T1, by rhythm: T2 P1's rhythm, T1 P1's pitch; rows for T2 P1's steps, T1 P1's, and what plays; on, it plays woven" title="A weave set up"> <img src="img/screen-woven.png" width="240" alt="The WEAVE track's page: ten boxes, T1 to T8, COND and THROW; T2's lit while its key is held, its weave T1 P1, rhythm" title="Weaving">
+ 
++### Generator
++
++A generator makes a track's steps for you while the song plays, and you see them on the grid as they change. It
++plays a live copy of the track's steps. The pattern itself stays as you wrote it until you press COMMIT. Each
++pattern has its own generator and settings, saved with the project. It works with every player: with random, the
++generator decides which steps play and the pitch pool picks their notes.
++
++**Set it up.** On a melodic track, press **ARP** and turn **SELECT** to the last page, Generator. **KNOB 1** picks
++the mode (off, euclid or turing), and **KNOBS 2 to 4** are that mode's settings. Choosing a mode sets sensible
++starting values. A hit on a step that has notes of its own plays them, with the generated velocity, and the step's
++tricks and chance still apply. A hit on an empty step plays the track's root: the notes of the first step that has
++any (a chord stays a chord), else C4. The Generator page's title shows it ("T2 euclid, root C4"), and the Steps
++page marks the live hits, the ones the generator makes rather than the pattern, with a small star in the cell's
++corner. To change the root, write a note or a chord on the first step you want it from, or clear the notes to go
++back to C4. A step with no hit is silent.
++
++| Mode | Knob 2 | Knob 3 | Knob 4 | What it does |
++|---|---|---|---|---|
++| euclid | length | hits | rotate | spreads that many hits as evenly as possible over that length, rotated. The cycle starts again at step 1 of every pass |
++| turing | length | lock | density | a looping shift register of 2 to 16 bits. Lock 127 repeats the loop exactly; lower, the bit that wraps round is flipped more and more often (0 is a coin toss). Density is how many steps play (0 none, 127 all); the velocity follows the register |
++
++Turing starts from the steps the pattern already has, so you can write a rhythm, turn it on and let it drift. The
++register starts again with the transport and when the pattern changes.
++
++**Keep it.** The **SEL** list on the Generator page has COMMIT GENERATOR, which writes the live copy into the
++pattern: a hit on an empty step gets the root note, a step with no hit loses its notes. Set the mode to off to
++let go of the generator and play the pattern as it is. COMMIT can be undone.
++
+ ## Recording
+ 
+ - **Live recording**: hold **REC** and press **PLAY**. Every track starts from step 1, and recording starts at
+@@ -1468,7 +1498,8 @@ On a sound page, hold **SAVE** and press white key 1 to 16 to keep the track's s
+ | LFO, SELECT | LFO 2 | the type's fourth and fifth | | | | play |
+ | ARP | Players | player | its first | its second | its third | play, through the player (random: Players 2 its randomization, Players 3 the octave) |
+ | ARP, SELECT | Players 2, Hold | the arp's length, style, glide, stereo; hold | | | | play |
+-| ARP, SELECT (last) | Weave | with | pattern | rule | plays | black: the track woven in, white: its pattern; SEL: KEEP AS PATTERN |
++| ARP, SELECT | Weave | with | pattern | rule | plays | black: the track woven in, white: its pattern; SEL: KEEP AS PATTERN |
++| ARP, SELECT (after Weave) | Generator | mode | length | hits or lock | rotate or density | SEL: COMMIT GENERATOR |
+ | GLO | Mix | FX I | FX II | pan | level | black: tap to mute, hold to solo (several together) |
+ | GLO, SELECT | Master EQ | low | mid | high | | |
+ | GLO, SELECT | Master color | color | amount | tone | mix | |
+diff --git a/tests/host/seq_test.c b/tests/host/seq_test.c
+index aa15fdf..03deb74 100644
+--- a/tests/host/seq_test.c
++++ b/tests/host/seq_test.c
+@@ -1664,6 +1664,126 @@ static void t_step_players(void)      /* the arp and the strum play the steps' n
+     printf("ok %s\n", cur);
+ }
+ 
++static void gen_set(int trk, int mode, int a, int b, int c)   /* a track's generator, as the UI sets it */
++{
++    uint8_t g[4] = {(uint8_t)mode, (uint8_t)a, (uint8_t)b, (uint8_t)c};
++    CHECK(lane_gen_set(P.lane, trk, 0, g) == 0);
++    S.gen_dirty |= (uint8_t)(1u << trk);
++}
++
++static void t_generators(void)         /* EUCLID and TURING: a shadow of the steps, the pattern left as it was */
++{
++    uint8_t g[4];
++    cur = "generators";
++    reset();
++    P.pat[0][0].len = 16;
++    gen_set(0, GEN_EUCLID, 8, 3, 0);              /* 3 in 8: x..x..x. */
++    start();
++    run(15 * L16 + 100);
++    CHECK(count(E_ON, 0) == 6);                   /* twice round the 16 */
++    CHECK(on_n(0)->a == 60);                      /* no notes in the pattern: the root */
++    CHECK(seq_gen_vel(&S, 0, 0) && !seq_gen_vel(&S, 0, 1) && !seq_gen_vel(&S, 0, 2) && seq_gen_vel(&S, 0, 3));
++    CHECK(step_empty(st(0, 0)) && step_empty(st(0, 3)));   /* the stored pattern is untouched */
++    stop();
++    /* rotate by 1 moves the hits one step on; hits 0 is silent */
++    reset();
++    P.pat[0][0].len = 8;
++    gen_set(0, GEN_EUCLID, 8, 3, 1);
++    start();
++    run(7 * L16 + 100);
++    CHECK(count(E_ON, 0) == 3);
++    CHECK(seq_gen_vel(&S, 0, 1) && !seq_gen_vel(&S, 0, 0) && seq_gen_vel(&S, 0, 4) && seq_gen_vel(&S, 0, 7));
++    stop();
++    reset();
++    gen_set(0, GEN_EUCLID, 16, 0, 0);
++    start();
++    run(15 * L16 + 100);
++    CHECK(count(E_ON, 0) == 0);
++    stop();
++    /* a hit on a stored note plays that note; the lane is off with mode 0 */
++    reset();
++    P.pat[0][0].len = 8;
++    st(0, 0)->note[0] = 67;
++    st(0, 0)->vel = 90;
++    gen_set(0, GEN_EUCLID, 8, 1, 0);
++    start();
++    run(7 * L16 + 100);
++    CHECK(count(E_ON, 0) == 1 && on_n(0)->a == 67);
++    stop();
++    g[0] = GEN_OFF; g[1] = g[2] = g[3] = 0;
++    lane_gen_set(P.lane, 0, 0, g);
++    CHECK(lane_find(P.lane, 0, 0, LANE_GEN) < 0);
++    /* TURING, lock 127: the loop repeats exactly, every 4 steps; density 127 plays all */
++    reset();
++    P.pat[0][0].len = 16;
++    st(0, 0)->note[0] = 60;
++    st(0, 0)->vel = 100;
++    st(0, 2)->note[0] = 60;
++    st(0, 2)->vel = 100;
++    gen_set(0, GEN_TURING, 4, 127, 64);
++    start();
++    run(15 * L16 + 100);
++    for (int i = 0; i < 12; i++)
++        CHECK(seq_gen_vel(&S, 0, i) == seq_gen_vel(&S, 0, i + 4));
++    CHECK(step_empty(st(0, 1)));                  /* the pattern stays */
++    stop();
++    reset();
++    P.pat[0][0].len = 16;
++    gen_set(0, GEN_TURING, 8, 127, 127);
++    start();
++    run(15 * L16 + 100);
++    CHECK(count(E_ON, 0) == 16);
++    stop();
++    reset();
++    P.pat[0][0].len = 16;
++    gen_set(0, GEN_TURING, 8, 127, 0);
++    start();
++    run(15 * L16 + 100);
++    CHECK(count(E_ON, 0) == 0);
++    stop();
++    /* lock 0: the register is random, the loop moves */
++    reset();
++    P.pat[0][0].len = 64;
++    st(0, 0)->note[0] = 60;
++    st(0, 0)->vel = 100;
++    gen_set(0, GEN_TURING, 8, 0, 100);
++    start();
++    run(63 * L16 + 100);
++    {
++        int moved = 0;
++        for (int i = 0; i < 56; i++)
++            moved |= seq_gen_vel(&S, 0, i) != seq_gen_vel(&S, 0, i + 8);
++        CHECK(moved);
++    }
++    stop();
++    /* a chord on the first step is the root: every hit plays all of it */
++    reset();
++    P.pat[0][0].len = 8;
++    st(0, 0)->note[0] = 60;
++    st(0, 0)->note[1] = 64;
++    st(0, 0)->note[2] = 67;
++    st(0, 0)->vel = 100;
++    gen_set(0, GEN_EUCLID, 8, 2, 0);
++    start();
++    run(7 * L16 + 100);
++    CHECK(count(E_ON, 0) == 6);
++    stop();
++    /* with the random player: the generator decides the rhythm, the pool the pitch */
++    reset();
++    P.pat[0][0].len = 8;
++    par[0][TP_PLAYER] = PL_RAND;
++    par[0][TP_P1] = 127;
++    par[0][TP_P4] = RAND_OCT_CENTRE;
++    par[0][TP_AP2] = 8;
++    lane_pool_set(P.lane, 0, 0, 1u << 0);
++    gen_set(0, GEN_EUCLID, 8, 2, 0);
++    start();
++    run(7 * L16 + 100);
++    CHECK(count(E_ON, 0) == 2);
++    stop();
++    printf("ok %s\n", cur);
++}
++
+ static void t_random_player(void)     /* the random player: the grid's active slots, the pool, the phrase knobs */
+ {
+     cur = "random-player";
+@@ -3371,6 +3491,7 @@ int main(void)
+     t_step_players();
+     t_hold_player();
+     t_random_player();
++    t_generators();
+     t_punch_keys();
+     t_duck();
+     t_loops();
+diff --git a/tests/scenarios/generator.xy b/tests/scenarios/generator.xy
+new file mode 100644
+index 0000000..7e1fa7e
+--- /dev/null
++++ b/tests/scenarios/generator.xy
+@@ -0,0 +1,77 @@
++# generator: EUCLID and TURING play a live copy of the steps (the pattern stays as it was until COMMIT), settings per pattern in a lane
++wait 300
++turn ALGO 1
++expect trk 2
++tap ARP
++expect page Players
++turn SELECT 1
++expect page Weave
++turn SELECT 1
++expect page Generator
++shot generator_off.png
++# euclid: the mode, then its start values (the pattern's length 16, a quarter of it: 4 hits)
++turn K1 1
++expect gen 2 1 1 16 4 0
++# (the cycle repeats over the 64 steps: 4 hits in 16 is 16)
++wait 100
++expect genhits 2 16
++shot generator_euclid.png
++turn K2 -8
++expect gen 2 1 1 8 4 0
++wait 100
++expect genhits 2 32
++turn K3 -1
++turn K4 1
++expect gen 2 1 1 8 3 1
++shot generator_euclid_rotated.png
++# the live copy is not the pattern: a step's note stays empty until COMMIT
++expect note 2 1 1 0
++# the Steps page before the commit: the live hits carry a star (the pattern's own steps would not)
++tap SEQ
++wait 50
++shot generator_steps_live.png
++tap ARP
++turn SELECT 1
++turn SELECT 1
++expect page Generator
++# COMMIT GENERATOR (the SEL list): the hits are written into the pattern (the root C4), the steps without one stay empty
++tap SEL
++wait 50
++shot generator_list.png
++tap SEL
++wait 100
++expect note 2 1 2 60
++expect note 2 1 1 0
++shot generator_committed.png
++tap PLAY
++wait 1200
++shot generator_playing.png
++# after the commit the hits are the pattern's own steps (no star); the live ones are on the Steps page above
++tap SEQ
++shot generator_steps.png
++tap PLAY
++tap ARP
++turn SELECT 1
++turn SELECT 1
++expect page Generator
++# turing: 8 bits, lock 100, density 100; it starts from the pattern's own steps (none: a seeded register)
++turn K1 1
++expect gen 2 1 2 8 100 100
++wait 100
++tap PLAY
++wait 1500
++shot generator_turing.png
++tap PLAY
++# saved with the project, in the pattern's lane: no format change
++projsave 1
++reboot
++wait 400
++expect gen 2 1 2 8 100 100
++# off: the lane goes
++tap ARP
++turn SELECT 1
++turn SELECT 1
++expect page Generator
++turn K1 -1
++turn K1 -1
++expect gen 2 1 0 0 0 0
+-- 
+2.55.0
+

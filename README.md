@@ -642,6 +642,10 @@ patches/
                                     over the track's own grid; the steps as active slots (with none set, all
                                     play); a per-pattern pitch pool picked on the piano mock, in-scale dots
                                     from the follow mode; no format change (a pseudo-lane)
+  fm1-loom/08-generators/           seq.c, pattern.c, pages.c, ui.c: EUCLID and TURING per pattern (ARP's
+                                    Generator page): a live shadow of the track's steps (64 bytes a track)
+                                    that plays and shows on the grid, the pattern kept until COMMIT; settings
+                                    in a pseudo-lane; no format change
   fm1-amb/01-usb-host-compat/       AMB-1's: the same descriptor set, and its USB names
   frasil/01-usb-host-compat/        FRASIL's: the same descriptor set, and its USB names
   felucca/01-usb-host-compat/       usb.c: MIDI behind the streams, the audio IAD, a serial; descriptor test

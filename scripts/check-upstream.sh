@@ -44,7 +44,8 @@ for spec in \
     dinghy:DINGHY \
     cs1:CS1 \
     melodee:MELODEE \
-    mutable-dreams:MUTABLE_DREAMS
+    mutable-dreams:MUTABLE_DREAMS \
+    elixir:ELIXIR
 do
     name=${spec%%:*}
     var=${spec#*:}

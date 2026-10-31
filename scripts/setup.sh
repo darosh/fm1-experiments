@@ -48,6 +48,7 @@ clone_repo dinghy         "$DINGHY_URL"          "$DINGHY_COMMIT"
 clone_repo cs1            "$CS1_URL"             "$CS1_COMMIT"
 clone_repo melodee        "$MELODEE_URL"         "$MELODEE_COMMIT"
 clone_repo mutable-dreams "$MUTABLE_DREAMS_URL"  "$MUTABLE_DREAMS_COMMIT"
+clone_repo elixir         "$ELIXIR_URL"          "$ELIXIR_COMMIT"
 
 # Some upstreams publish no source tree, only an archive. Mutable Dreams' repository holds release
 # assets: the pinned checkout stays as it is and the source archive is extracted beside it into src/,
